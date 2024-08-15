@@ -165,7 +165,7 @@ namespace zygiskd {
 
         info->pid = socket_utils::read_u32(fd);
 
-info->modules = (struct zygote_modules *)malloc(sizeof(struct zygote_modules));
+        info->modules = (struct zygote_modules *)malloc(sizeof(struct zygote_modules));
         if (info->modules == NULL) {
           info->modules->modules_count = 0;
 
