@@ -147,8 +147,6 @@ namespace zygiskd {
       int fd = Connect(1);
 
       if (fd != -1) {
-        info->running = true;
-
         socket_utils::write_u8(fd, (uint8_t) SocketAction::GetInfo);
 
         int flags = socket_utils::read_u32(fd);
@@ -162,8 +160,6 @@ namespace zygiskd {
         } else {
           info->root_impl = ZYGOTE_ROOT_IMPL_NONE;
         }
-
-        info->pid = socket_utils::read_u32(fd);
 
         info->modules = (struct zygote_modules *)malloc(sizeof(struct zygote_modules));
         if (info->modules == NULL) {

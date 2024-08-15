@@ -103,8 +103,24 @@ struct EventLoop {
     }
 };
 
+enum TracingState {
+  TRACING = 1,
+  STOPPING,
+  STOPPED,
+  EXITING
+};
+
 TracingState tracing_state = TRACING;
 static char prop_path[PATH_MAX];
+
+struct Status {
+  bool supported = false;
+  bool zygote_injected = false;
+  bool daemon_running = false;
+  pid_t daemon_pid = -1;
+  char *daemon_info;
+  char *daemon_error_info;
+};
 
 Status status64;
 Status status32;
@@ -702,6 +718,77 @@ static void updateStatus() {
   fprintf(prop, "%s[%s] %s", pre_section, status_text, post_section);
 
   fclose(prop);
+
+  struct zygote_info info;
+  zygiskd::GetInfo(&info);
+
+  /* TODO: Perhaps change to binary reading and writing? */
+  FILE *fd_state = fopen("/data/adb/rezygisk/state.json", "w");
+  if (fd_state == NULL) {
+    PLOGE("failed to open state.json");
+
+    return;
+  }
+
+  fprintf(fd_state, "{\n"
+                    "  \"tracing_state\": %d,\n"
+                    "  \"status64\": {\n"
+                    "    \"supported\": %d,\n"
+                    "    \"zygote_injected\": %d,\n"
+                    "    \"daemon_running\": %d,\n"
+                    "    \"daemon_pid\": %d,\n"
+                    "    \"daemon_info\": \"%s\",\n"
+                    "    \"daemon_error_info\": \"%s\"\n"
+                    "  },\n"
+                    "  \"status32\": {\n"
+                    "    \"supported\": %d,\n"
+                    "    \"zygote_injected\": %d,\n"
+                    "    \"daemon_running\": %d,\n"
+                    "    \"daemon_pid\": %d,\n"
+                    "    \"daemon_info\": \"%s\",\n"
+                    "    \"daemon_error_info\": \"%s\"\n"
+                    "  },\n"
+                    "  \"modules_info\": {\n"
+                    "    \"amount\": %d,\n",
+          tracing_state,
+
+          status64.supported,
+          status64.zygote_injected,
+          status64.daemon_running,
+          status64.daemon_pid,
+          status64.daemon_info,
+          status64.daemon_error_info,
+
+          status32.supported,
+          status32.zygote_injected,
+          status32.daemon_running,
+          status32.daemon_pid,
+          status32.daemon_info,
+          status32.daemon_error_info,
+          
+          info.modules->modules_count);
+  
+  if (info.modules->modules_count != 0) {
+    fprintf(fd_state, "    \"modules\": [\n");
+
+    for (int i = 0; i < info.modules->modules_count; i++) {
+      fprintf(fd_state, "      \"%s\"%s\n",
+              info.modules->modules[i],
+              i == info.modules->modules_count - 1 ? "" : ",");
+
+      free(info.modules->modules[i]);
+    }
+
+    fprintf(fd_state, "    ]\n");
+
+    free(info.modules->modules);
+  } else {
+    fprintf(fd_state, "    \"modules\": []\n");
+  }
+
+  fprintf(fd_state, "}\n");
+
+  fclose(fd_state);
 }
 
 static bool prepare_environment() {
@@ -722,58 +809,16 @@ static bool prepare_environment() {
   int pre_section_len = 0;
   int post_section_len = 0;
 
-  /* TODO: improve this code */
-  int i = 1;
-  while (1) {
-    int int_char = fgetc(orig_prop);
-    if (int_char == EOF) break;
+  char line[1024];
+  while (fgets(line, sizeof(line), orig_prop) != NULL) {
+    if (strstr(line, field_name) == line) {
+      strncat(pre_section, "description=", sizeof(pre_section) - pre_section_len);
 
-    pre_section[pre_section_len] = (char)int_char;
-    pre_section[pre_section_len + 1] = '\0';
-    pre_section_len++;
+      pre_section_len += strlen("description=");
+    } else {
+      strncat(post_section, line, sizeof(post_section) - post_section_len);
 
-    if ((char)int_char != field_name[0]) continue;
-
-    while (1) {
-      int int_char2 = fgetc(orig_prop);
-      if (int_char2 == EOF) break;
-
-      if ((char)int_char2 == field_name[i]) {
-        i++;
-
-        if (i == (int)(sizeof(field_name) - 1)) {
-          pre_section[pre_section_len] = (char)int_char2;
-          pre_section[pre_section_len + 1] = '\0';
-          pre_section_len++;
-      
-          while (1) {
-            int int_char3 = fgetc(orig_prop);
-            if (int_char3 == EOF) break;
-
-            post_section[post_section_len] = (char)int_char3;
-            post_section[post_section_len + 1] = '\0';
-            post_section_len++;
-
-            i++;
-          }
-
-          break;
-        } else {
-          pre_section[pre_section_len] = (char)int_char2;
-          pre_section[pre_section_len + 1] = '\0';
-          pre_section_len++;
-
-          continue;
-        }
-      } else {
-        pre_section[pre_section_len] = (char)int_char2;
-        pre_section[pre_section_len + 1] = '\0';
-        pre_section_len++;
-
-        i = 1;
-
-        break;
-      }
+      post_section_len += strlen(line);
     }
   }
 
