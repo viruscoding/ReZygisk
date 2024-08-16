@@ -17,9 +17,9 @@
 #include "dl.h"
 #include "utils.h"
 
-typedef void (*ZygiskCompanionEntryFn)(int);
+typedef void (*zygisk_companion_entry_func)(int);
 
-ZygiskCompanionEntryFn load_module(int fd) {
+zygisk_companion_entry_func load_module(int fd) {
   char path[PATH_MAX];
   snprintf(path, sizeof(path), "/proc/self/fd/%d", fd);
 
@@ -27,10 +27,10 @@ ZygiskCompanionEntryFn load_module(int fd) {
   void *entry = dlsym(handle, "zygisk_companion_entry");
   if (entry == NULL) return NULL;
 
-  return (ZygiskCompanionEntryFn)entry;
+  return (zygisk_companion_entry_func)entry;
 }
 
-void *ExecuteNew(void *arg) {
+void *call_entry(void *arg) {
   int fd = *((int *)arg);
 
   struct stat st0;
@@ -65,13 +65,10 @@ void *ExecuteNew(void *arg) {
   return NULL;
 }
 
-
 void entry(int fd) {
   LOGI("companion entry fd: |%d|\n", fd);
 
   char name[256 + 1];
-
-  /* INFO: Getting stuck here */
   ssize_t ret = read_string(fd, name, sizeof(name) - 1);
   if (ret == -1) return;
 
@@ -84,7 +81,7 @@ void entry(int fd) {
 
   LOGI("Library fd: %d\n", library_fd);
 
-  ZygiskCompanionEntryFn entry = load_module(library_fd);
+  zygisk_companion_entry_func entry = load_module(library_fd);
 
   LOGI("Library loaded\n");
 
@@ -95,17 +92,28 @@ void entry(int fd) {
   if (entry == NULL) {
     LOGI("No companion entry for: %s\n", name);
 
-    write(fd, (void *)0, 1);
+    uint8_t response[1] = { 0 };
+    write(fd, &response, sizeof(response));
+
+    exit(0);
 
     return;
   }
 
   LOGI("Companion process created for: %s\n", name);
 
-  uint8_t response = 1;
+  uint8_t response[1] = { 1 };
   write(fd, &response, sizeof(response));
 
   while (1) {
+    if (!check_unix_socket(fd, true)) {
+      LOGI("Something went wrong. Bye!\n");
+
+      exit(0);
+
+      break;
+    }
+
     int client_fd;
     recv_fd(fd, &client_fd);
 
@@ -113,13 +121,14 @@ void entry(int fd) {
 
     write(fd, &response, sizeof(response));
     
+    /* TODO: Do we really need to allocate this..? */
     int *client_fd_ptr = malloc(sizeof(int));
     *client_fd_ptr = client_fd;
 
     LOGI("Creating new thread for companion request\n");
 
     pthread_t thread;
-    pthread_create(&thread, NULL, ExecuteNew, (void *)client_fd_ptr);
+    pthread_create(&thread, NULL, call_entry, (void *)client_fd_ptr);
     pthread_detach(thread);
   }
 }

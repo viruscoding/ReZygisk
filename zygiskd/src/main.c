@@ -14,14 +14,7 @@
 int __android_log_print(int prio, const char *tag,  const char *fmt, ...);
 
 int main(int argc, char *argv[]) {
-  errno = 0;
-  /* Initialize android logger */
-  LOGI("Initializing zygiskd\n");
-
-  LOGI("Argc: %d\n", argc);
-  for (int i = 0; i < argc; i++) {
-    LOGI("argv[%d] = %s\n", i, argv[i]);
-  }
+  LOGI("Initializing zygiskd: %s\n", argv[0]);
 
   if (argc > 1) {
     if (strcmp(argv[1], "companion") == 0) {
@@ -65,8 +58,12 @@ int main(int argc, char *argv[]) {
 
           return 0;
         }
+        case APatch: {
+          LOGI("APatch root implementation found.\n");
+
+          return 0;
+        }
       }
-      
 
       return 0;
     }

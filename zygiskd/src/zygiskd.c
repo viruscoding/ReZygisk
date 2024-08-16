@@ -41,7 +41,7 @@ enum Architecture {
 #define TMP_PATH "/data/adb/rezygisk"
 #define CONTROLLER_SOCKET TMP_PATH "/init_monitor"
 #define PATH_CP_NAME TMP_PATH "/" lp_select("cp32.sock", "cp64.sock")
-#define ZYGISKD_FILE "zygiskd" lp_select("32", "64")
+#define ZYGISKD_FILE PATH_MODULES_DIR "/zygisksu/bin/zygiskd" lp_select("32", "64")
 #define ZYGISKD_PATH "/data/adb/modules/zygisksu/bin/zygiskd" lp_select("32", "64")
 
 #define ASSURE_SIZE_WRITE(area_name, subarea_name, sent_size, expected_size)                                    \
@@ -100,30 +100,42 @@ static enum Architecture get_arch(void) {
 int create_library_fd(const char *so_path) {
   int memfd = memfd_create("jit-cache-zygisk", MFD_ALLOW_SEALING);
   if (memfd == -1) {
-    perror("memfd_create");
+    LOGE("Failed creating memfd: %s\n", strerror(errno));
 
     return -1;
   }
 
   int so_fd = open(so_path, O_RDONLY);
   if (so_fd == -1) {
-    perror("open");
+    LOGE("Failed opening so file: %s\n", strerror(errno));
+
     close(memfd);
 
     return -1;
   }
 
-  struct stat st;
-  if (fstat(so_fd, &st) == -1) {
-    perror("fstat");
+  off_t so_size = lseek(so_fd, 0, SEEK_END);
+  if (so_size == -1) {
+    LOGE("Failed getting so file size: %s\n", strerror(errno));
+
     close(so_fd);
     close(memfd);
 
     return -1;
   }
 
-  if (sendfile(memfd, so_fd, NULL, st.st_size) == -1) {
-    perror("sendfile");
+  if (lseek(so_fd, 0, SEEK_SET) == -1) {
+    LOGE("Failed seeking so file: %s\n", strerror(errno));
+
+    close(so_fd);
+    close(memfd);
+
+    return -1;
+  }
+
+  if (sendfile(memfd, so_fd, NULL, so_size) == -1) {
+    LOGE("Failed copying so file to memfd: %s\n", strerror(errno));
+
     close(so_fd);
     close(memfd);
 
@@ -133,7 +145,8 @@ int create_library_fd(const char *so_path) {
   close(so_fd);
 
   if (fcntl(memfd, F_ADD_SEALS, F_SEAL_SHRINK | F_SEAL_GROW | F_SEAL_WRITE | F_SEAL_SEAL) == -1) {
-    perror("fcntl");
+    LOGE("Failed sealing memfd: %s\n", strerror(errno));
+
     close(memfd);
 
     return -1;
@@ -266,14 +279,21 @@ static int spawn_companion(char *name, int lib_fd) {
     LOGI("Waiting for companion to start (%d)\n", pid);
 
     int status = 0;
-    // waitpid(pid, &status, 0);
+    waitpid(pid, &status, 0);
 
     LOGI("Companion exited with status %d\n", status);
 
-    // if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
-      if (write_string(daemon_fd, name) == -1) return -1;
+    if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
+      if (write_string(daemon_fd, name) == -1) {
+        LOGE("Failed sending module name\n");
 
-      if (send_fd(daemon_fd, lib_fd) == -1) return -1;
+        return -1;
+      }
+      if (send_fd(daemon_fd, lib_fd) == -1) {
+        LOGE("Failed sending lib fd\n");
+
+        return -1;
+      }
 
       LOGI("Sent module name and lib fd\n");
       
@@ -281,20 +301,27 @@ static int spawn_companion(char *name, int lib_fd) {
       ssize_t ret = read(daemon_fd, &response_buf, sizeof(response_buf));
       ASSURE_SIZE_READ_WR("companion", "response", ret, sizeof(response_buf));
 
-      uint8_t response = response_buf[0];
+      LOGI("Companion response: %hhu\n", response_buf[0]);
 
-      LOGI("Companion response: %hhu\n", response);
+      if (response_buf[0] == 0) {
+        close(daemon_fd);
 
-      if (response == 0) return -2;
-      else if (response == 1) return daemon_fd;
-      else return -2;
-    // } else {
-    //   LOGE("Exited with status %d\n", status);
+        return -1;
+      } else if (response_buf[0] == 1) return daemon_fd;
+      else {
+        LOGE("Invalid response from companion: %hhu\n", response_buf[0]);
 
-    //   close(daemon_fd);
+        close(daemon_fd);
 
-    //   return -1;
-    // }
+        return -1;
+      }
+    } else {
+      LOGE("Exited with status %d\n", status);
+
+      close(daemon_fd);
+
+      return -1;
+    }
   /* INFO: if pid == 0: */
   } else {
     LOGI("Companion started (%d)\n", pid);
@@ -307,11 +334,11 @@ static int spawn_companion(char *name, int lib_fd) {
 
   LOGI("Executing companion...\n");
 
-  char *argv[] = { ZYGISKD_FILE, "companion", companion_fd_str, NULL };
-  if (execv(ZYGISKD_PATH, argv) == -1) {
-    LOGE("Failed executing companion: %s\n", strerror(errno));
+  char arg[sizeof(ZYGISKD_FILE) + sizeof(" companion ") + 32];
+  snprintf(arg, sizeof(arg), "%s companion %d", ZYGISKD_FILE, companion_fd);
 
-    close(companion_fd);
+  if (system(arg) == -1) {
+    LOGE("Failed executing companion: %s\n", strerror(errno));
 
     exit(1);
   }
@@ -329,34 +356,60 @@ struct __attribute__((__packed__)) MsgHead {
 void zygiskd_start(void) {
   LOGI("Welcome to ReZygisk %s!", ZKSU_VERSION);
 
+  enum RootImpl impl = get_impl();
+  if (impl == None) {
+    struct MsgHead *msg = malloc(sizeof(struct MsgHead) + sizeof("No root implementation found."));
+    msg->cmd = DAEMON_SET_ERROR_INFO;
+    msg->length = sizeof("No root implementation found.");
+    memcpy(msg->data, "No root implementation found.", msg->length);
+
+    unix_datagram_sendto(CONTROLLER_SOCKET, &msg, sizeof(struct MsgHead) + msg->length);
+
+    free(msg);
+  } else if (impl == Multiple) {
+    struct MsgHead *msg = malloc(sizeof(struct MsgHead) + sizeof("Multiple root implementations found. Not supported yet."));
+    msg->cmd = DAEMON_SET_ERROR_INFO;
+    msg->length = sizeof("Multiple root implementations found. Not supported yet.");
+    memcpy(msg->data, "Multiple root implementations found. Not supported yet.", msg->length);
+
+    unix_datagram_sendto(CONTROLLER_SOCKET, &msg, sizeof(struct MsgHead) + msg->length);
+
+    free(msg);
+  }
+
   enum Architecture arch = get_arch();
 
   struct Context context;
   load_modules(arch, &context);
 
   struct MsgHead *msg = NULL;
-  size_t msg_sz = 0;
 
-  switch (get_impl()) {
-    case None: {
-      /* INFO: Stop, compiler. */
+  switch (impl) {
+    case None: { break; }
+    case Multiple: { break; }
+    case KernelSU:
+    case APatch: {
+      size_t root_impl_len = strlen(impl == KernelSU ? "KernelSU" : "APatch");
 
-      break;
-    }
-    case Multiple: {
-      /* INFO: Stop, compiler. */
-
-      break;
-    }
-
-    case KernelSU: {
       if (context.len == 0) {
-        msg_sz = sizeof(struct MsgHead) + strlen("Root: KernelSU, Modules: None") + 1;
-        msg = malloc(msg_sz);
-
+        msg = malloc(sizeof(struct MsgHead) + strlen("Root: , Modules: None") + root_impl_len + 1);
         msg->cmd = DAEMON_SET_INFO;
-        msg->length = strlen("Root: KernelSU, Modules: None") + 1;
-        memcpy(msg->data, "Root: KernelSU, Modules: None", strlen("Root: KernelSU, Modules: None"));
+        msg->length = strlen("Root: , Modules: None") + root_impl_len + 1;
+
+        switch (impl) {
+          case None: { break; }
+          case Multiple: { break; }
+          case KernelSU: {
+            memcpy(msg->data, "Root: KernelSU, Modules: None", strlen("Root: KernelSU, Modules: None"));
+
+            break;
+          }
+          case APatch: {
+            memcpy(msg->data, "Root: APatch, Modules: None", strlen("Root: APatch, Modules: None"));
+
+            break;
+          }
+        }
       } else {
         char *module_list = malloc(1);
         size_t module_list_len = 0;
@@ -379,32 +432,34 @@ void zygiskd_start(void) {
           }
         }
 
-        msg_sz = sizeof(struct MsgHead) + strlen("Root: KernelSU, Modules: ") + module_list_len + 1;
-        msg = malloc(msg_sz);
-
+        msg = malloc(sizeof(struct MsgHead) + strlen("Root: , Modules: ") + root_impl_len + module_list_len + 1);
         msg->cmd = DAEMON_SET_INFO;
-        msg->length = strlen("Root: KernelSU, Modules: ") + module_list_len + 1;
-        memcpy(msg->data, "Root: KernelSU, Modules: ", strlen("Root: KernelSU, Modules: "));
-        memcpy(msg->data + strlen("Root: KernelSU, Modules: "), module_list, module_list_len);
+        msg->length = strlen("Root: , Modules: ") + root_impl_len + module_list_len + 1;
+
+        switch (impl) {
+          case None: { break; }
+          case Multiple: { break; }
+          case KernelSU: {
+            memcpy(msg->data, "Root: KernelSU, Modules: ", strlen("Root: KernelSU, Modules: "));
+
+            break;
+          }
+          case APatch: {
+            memcpy(msg->data, "Root: APatch, Modules: ", strlen("Root: APatch, Modules: "));
+
+            break;
+          }
+        }
+        memcpy(msg->data + strlen("Root: , Modules: ") + root_impl_len, module_list, module_list_len);
 
         free(module_list);
       }
 
       break;
     }
-    default: {
-      msg_sz = sizeof(struct MsgHead) + strlen("Invalid root implementation") + 1;
-      msg = malloc(msg_sz);
-
-      msg->cmd = DAEMON_SET_ERROR_INFO;
-      msg->length = strlen("Invalid root implementation") + 1;
-      memcpy(msg->data, "Invalid root implementation", strlen("Invalid root implementation"));
-
-      break;
-    }
   }
 
-  unix_datagram_sendto(CONTROLLER_SOCKET, (void *)msg, msg_sz);
+  unix_datagram_sendto(CONTROLLER_SOCKET, (void *)msg, sizeof(struct MsgHead) + msg->length);
 
   free(msg);
 
@@ -425,7 +480,7 @@ void zygiskd_start(void) {
 
     LOGI("Accepted client: %d\n", client_fd);
 
-    unsigned char buf[1];
+    uint8_t buf[1];
     ssize_t len = read(client_fd, buf, sizeof(buf));
     if (len == -1) {
       LOGE("read: %s\n", strerror(errno));
@@ -437,7 +492,7 @@ void zygiskd_start(void) {
       return;
     }
 
-    LOGI("Action: %hhu\n", (uint8_t)buf[0]);
+    LOGI("Action: %hhu\n", buf[0]);
     enum DaemonSocketAction action = (enum DaemonSocketAction)buf[0];
 
     switch (action) {
@@ -448,8 +503,6 @@ void zygiskd_start(void) {
         break;
       }
       case ZygoteRestart: {
-        LOGI("Zygote restart\n");
-
         for (int i = 0; i < context.len; i++) {
           if (context.modules[i].companion != -1) {
             close(context.modules[i].companion);
@@ -465,22 +518,31 @@ void zygiskd_start(void) {
 
         break;
       }
+      /* TODO: May need to move to another thread? :/ */
       case RequestLogcatFd: {
-        char level_buf[1];
+        uint8_t level_buf[1];
         ssize_t ret = read(client_fd, &level_buf, sizeof(level_buf));
         ASSURE_SIZE_READ_BREAK("RequestLogcatFd", "level", ret, sizeof(level_buf));
 
-        char level = level_buf[0];
+        uint8_t level = level_buf[0];
 
         char tag[128 + 1];
         ret = read_string(client_fd, tag, sizeof(tag) - 1);
-        if (ret == -1) break;
+        if (ret == -1) {
+          LOGE("Failed reading tag\n");
+
+          break;
+        }
 
         tag[ret] = '\0';
 
         char message[1024];
         ret = read_string(client_fd, message, sizeof(message));
-        if (ret == -1) break;
+        if (ret == -1) {
+          LOGE("Failed reading message\n");
+
+          break;
+        }
 
         __android_log_print(level, tag, "%.*s", (int)ret, message);
 
@@ -489,13 +551,11 @@ void zygiskd_start(void) {
       case GetProcessFlags: {
         LOGI("Getting process flags\n");
 
-        uid_t uid_buf[1];
+        uint32_t uid_buf[1];
         ssize_t ret = read(client_fd, &uid_buf, sizeof(uid_buf));
         ASSURE_SIZE_READ_BREAK("GetProcessFlags", "uid", ret, sizeof(uid_buf));
 
-        uid_t uid = uid_buf[0];
-
-        LOGI("Checking flags for uid: %d\n", uid);
+        uint32_t uid = uid_buf[0];
 
         uint32_t flags = 0;
         if (uid_is_manager(uid)) {
@@ -512,23 +572,22 @@ void zygiskd_start(void) {
         LOGI("Flags for uid %d: %d\n", uid, flags);
 
         switch (get_impl()) {
-          case None: {
-            break;
-          }
-          case Multiple: {
-            break;
-          }
+          case None: { break; }
+          case Multiple: { break; }
           case KernelSU: {
             flags |= PROCESS_ROOT_IS_KSU;
+
+            break;
+          }
+          case APatch: {
+            flags |= PROCESS_ROOT_IS_APATCH;
+
+            break;
           }
         }
 
-        // LOGI("Flags for uid %d: %d\n", uid, flags);
-
-        LOGI("Sending flags\n");
-
         ret = write(client_fd, &flags, sizeof(flags));
-        // ASSURE_SIZE_WRITE_BREAK("GetProcessFlags", "flags", ret, sizeof(flags));
+        ASSURE_SIZE_WRITE_BREAK("GetProcessFlags", "flags", ret, sizeof(flags));
 
         LOGI("Sent flags\n");
 
@@ -540,14 +599,17 @@ void zygiskd_start(void) {
         LOGI("Getting info\n");
 
         switch (get_impl()) {
-          case None: {
-            break;
-          }
-          case Multiple: {
-            break;
-          }
+          case None: { break; }
+          case Multiple: { break; }
           case KernelSU: {
             flags |= PROCESS_ROOT_IS_KSU;
+
+            break;
+          }
+          case APatch: {
+            flags |= PROCESS_ROOT_IS_APATCH;
+
+            break;
           }
         }
 
@@ -556,7 +618,7 @@ void zygiskd_start(void) {
         ssize_t ret = write(client_fd, &flags, sizeof(flags));
         ASSURE_SIZE_WRITE_BREAK("GetInfo", "flags", ret, sizeof(flags));
 
-        pid_t pid = getpid();
+        uint32_t pid = getpid();
 
         LOGI("Getting pid: %d\n", pid);
     
@@ -564,6 +626,13 @@ void zygiskd_start(void) {
         ASSURE_SIZE_WRITE_BREAK("GetInfo", "pid", ret, sizeof(pid));
 
         LOGI("Sent pid\n");
+
+        size_t modules_len = context.len;
+        ret = write(client_fd, &modules_len, sizeof(modules_len));
+        
+        for (size_t i = 0; i < modules_len; i++) {
+          write_string(client_fd, context.modules[i].name);
+        }
 
         break;
       }
@@ -574,23 +643,20 @@ void zygiskd_start(void) {
         ssize_t ret = write(client_fd, &clen, sizeof(clen));
         ASSURE_SIZE_WRITE_BREAK("ReadModules", "len", ret, sizeof(clen));
 
-        for (int i = 0; i < (int)clen; i++) {
-          LOGI("Hey, we're talking about: %d\n", i);
-          LOGI("Writing module `%s` to stream\n", context.modules[i].name);
-          LOGI("Lib fd: %d\n", context.modules[i].lib_fd);
+        for (size_t i = 0; i < clen; i++) {
+          LOGI("Hey, we're talking about: %zu, with name and lib_fd: %s, %d\n", i, context.modules[i].name, context.modules[i].lib_fd);
 
-          size_t name_len = strlen(context.modules[i].name);
+          if (write_string(client_fd, context.modules[i].name) == -1) {
+            LOGE("Failed writing module name\n");
 
-          LOGI("Name length: %zu\n", name_len);
-          ret = write(client_fd, &name_len, sizeof(name_len));
-          ASSURE_SIZE_WRITE_BREAK("ReadModules", "name length", ret, sizeof(name_len));
+            break;
+          }
 
-          LOGI("Writing name: %s\n", context.modules[i].name);
-          ret = write(client_fd, context.modules[i].name, name_len);
-          ASSURE_SIZE_WRITE_BREAK("ReadModules", "name", ret, name_len);
+          if (send_fd(client_fd, context.modules[i].lib_fd) == -1) {
+            LOGE("Failed sending lib fd\n");
 
-          LOGI("Writing lib fd: %d\n", context.modules[i].lib_fd);
-          if (send_fd(client_fd, context.modules[i].lib_fd) == -1) break;
+            break;
+          }
         }
 
         LOGI("Finished reading modules to stream\n");
@@ -612,10 +678,10 @@ void zygiskd_start(void) {
         if (companion_fd != -1) {
           LOGI("Companion for module `%s` already exists\n", module->name);
 
-          if (fcntl(companion_fd, F_GETFD) == -1) {
+          if (!check_unix_socket(companion_fd, false)) {
             LOGE("Poll companion for module `%s` crashed\n", module->name);
-            close(companion_fd);
 
+            close(companion_fd);
             module->companion = -1;
           }
         }
@@ -630,21 +696,25 @@ void zygiskd_start(void) {
 
             module->companion = companion_fd;
 
-            if (send_fd(client_fd, companion_fd) == -1) break;
-          } else if (companion_fd == -2) {
-            LOGI("Could not spawn companion for `%s` as it has no entry\n", module->name);
+            /* INFO: Reversed params, may fix issues */
+            if (send_fd(companion_fd, client_fd) == -1) {
+              LOGE("Failed sending companion fd\n");
 
-            /* TODO: Avoid duplicated code -- Merge this and the one below. */
-            uint8_t response = 0;
-            ret = write(client_fd, &response, sizeof(response));
-            ASSURE_SIZE_WRITE_BREAK("RequestCompanionSocket", "response", ret, sizeof(response));
+              uint8_t response = 0;
+              ret = write(client_fd, &response, sizeof(response));
+              ASSURE_SIZE_WRITE_BREAK("RequestCompanionSocket", "response", ret, sizeof(response));
+            }
           } else {
-            LOGE("Failed to spawn companion for `%s`\n", module->name);
-
-            uint8_t response = 0;
-            ret = write(client_fd, &response, sizeof(response));
-            ASSURE_SIZE_WRITE_BREAK("RequestCompanionSocket", "response", ret, sizeof(response));
+            if (companion_fd == -2) {
+              LOGI("Could not spawn companion for `%s` as it has no entry\n", module->name);
+            } else {
+              LOGI("Could not spawn companion for `%s` due to failures.\n", module->name);
+            }
           }
+
+          uint8_t response = 0;
+          ret = write(client_fd, &response, sizeof(response));
+          ASSURE_SIZE_WRITE_BREAK("RequestCompanionSocket", "response", ret, sizeof(response));
 
           LOGI("Companion fd: %d\n", companion_fd);
         }
@@ -666,19 +736,25 @@ void zygiskd_start(void) {
         snprintf(dir, PATH_MAX, "%s/%s", PATH_MODULES_DIR, context.modules[index].name);
 
         LOGI("Module directory: %s\n", dir);
+        /* INFO: Maybe not read only? */
         int dir_fd = open(dir, O_RDONLY);
 
         LOGI("Module directory fd: %d\n", dir_fd);
 
-        if (send_fd(client_fd, dir_fd) == -1) break;
+        if (send_fd(client_fd, dir_fd) == -1) {
+          LOGE("Failed sending module directory fd\n");
+
+          close(dir_fd);
+
+          break;
+        }
 
         LOGI("Sent module directory fd\n");
 
         break;
       }
 
-
-
+      /* INFO: Maybe we don't need to close? */
       close(client_fd);
     }
 
