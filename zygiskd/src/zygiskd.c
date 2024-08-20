@@ -12,6 +12,8 @@
 
 #include <unistd.h>
 #include <linux/limits.h>
+#include <sys/syscall.h>
+#include <linux/memfd.h>
 
 #include <pthread.h>
 
@@ -97,8 +99,10 @@ static enum Architecture get_arch(void) {
   exit(1);
 }
 
-int create_library_fd(const char *so_path) {
-  int memfd = memfd_create("jit-cache-zygisk", MFD_ALLOW_SEALING);
+int create_library_fd(const char *restrict so_path) {
+  /* INFO: This is required as older implementations of glibc may not
+             have the memfd_create function call, causing a crash. */
+  int memfd = syscall(SYS_memfd_create, "jit-cache-zygisk", MFD_ALLOW_SEALING);
   if (memfd == -1) {
     LOGE("Failed creating memfd: %s\n", strerror(errno));
 
@@ -155,9 +159,8 @@ int create_library_fd(const char *so_path) {
   return memfd;
 }
 
-
 /* WARNING: Dynamic memory based */
-static void load_modules(enum Architecture arch, struct Context *context) {
+static void load_modules(enum Architecture arch, struct Context *restrict context) {
   context->len = 0;
   context->modules = malloc(1);
 
@@ -213,11 +216,16 @@ static void load_modules(enum Architecture arch, struct Context *context) {
     char disabled[PATH_MAX];
     snprintf(disabled, PATH_MAX, "/data/adb/modules/%s/disable", name);
 
-    if (stat(disabled, &st) != -1) {
-      errno = 0;
+    if (stat(disabled, &st) == -1) {
+      if (errno != ENOENT) {
+        LOGE("Failed checking if module `%s` is disabled: %s\n", name, strerror(errno));
+        errno = 0;
 
-      continue;
-    }
+        continue;
+      }
+
+      errno = 0;
+    } else continue;
 
     LOGI("Loading module `%s`...\n", name);
     int lib_fd = create_library_fd(so_path);
@@ -237,7 +245,7 @@ static void load_modules(enum Architecture arch, struct Context *context) {
   }
 }
 
-static void free_modules(struct Context *context) {
+static void free_modules(struct Context *restrict context) {
   for (int i = 0; i < context->len; i++) {
     free(context->modules[i].name);
     if (context->modules[i].companion != -1) close(context->modules[i].companion);
@@ -250,7 +258,7 @@ static int create_daemon_socket(void) {
   return unix_listener_from_path(PATH_CP_NAME);
 }
 
-static int spawn_companion(char *name, int lib_fd) {
+static int spawn_companion(char *restrict name, int lib_fd) {
   int sockets[2];
   if (socketpair(AF_UNIX, SOCK_STREAM, 0, sockets) == -1) {
     LOGE("Failed creating socket pair.\n");
@@ -324,7 +332,7 @@ static int spawn_companion(char *name, int lib_fd) {
     }
   /* INFO: if pid == 0: */
   } else {
-    LOGI("Companion started (%d)\n", pid);
+    LOGI("Companion started\n");
     /* INFO: There is no case where this will fail with a valid fd. */
     fcntl(companion_fd, F_SETFD, 0);
   }
@@ -334,19 +342,20 @@ static int spawn_companion(char *name, int lib_fd) {
 
   LOGI("Executing companion...\n");
 
-  char arg[sizeof(ZYGISKD_FILE) + sizeof(" companion ") + 32];
-  snprintf(arg, sizeof(arg), "%s companion %d", ZYGISKD_FILE, companion_fd);
-
-  if (system(arg) == -1) {
+  char *argv[] = { ZYGISKD_FILE, "companion", companion_fd_str, NULL };
+  if (non_blocking_execv(ZYGISKD_PATH, argv) == -1) {
     LOGE("Failed executing companion: %s\n", strerror(errno));
+
+    close(companion_fd);
 
     exit(1);
   }
 
+  LOGI("Bye bye!\n");
+
   exit(0);
 }
 
-/* TODO: Is packed attribute really necessary? */
 struct __attribute__((__packed__)) MsgHead {
   unsigned int cmd;
   int length;
@@ -354,7 +363,7 @@ struct __attribute__((__packed__)) MsgHead {
 };
 
 void zygiskd_start(void) {
-  LOGI("Welcome to ReZygisk %s!", ZKSU_VERSION);
+  LOGI("Welcome to ReZygisk %s!\n", ZKSU_VERSION);
 
   enum RootImpl impl = get_impl();
   if (impl == None) {
@@ -388,8 +397,28 @@ void zygiskd_start(void) {
     case None: { break; }
     case Multiple: { break; }
     case KernelSU:
-    case APatch: {
-      size_t root_impl_len = strlen(impl == KernelSU ? "KernelSU" : "APatch");
+    case APatch:
+    case Magisk: {
+      size_t root_impl_len = 0;
+      switch (impl) {
+        case None: { break; }
+        case Multiple: { break; }
+        case KernelSU: {
+          root_impl_len = strlen("KernelSU");
+
+          break;
+        }
+        case APatch: {
+          root_impl_len = strlen("APatch");
+
+          break;
+        }
+        case Magisk: {
+          root_impl_len = strlen("Magisk");
+
+          break;
+        }
+      }
 
       if (context.len == 0) {
         msg = malloc(sizeof(struct MsgHead) + strlen("Root: , Modules: None") + root_impl_len + 1);
@@ -406,6 +435,11 @@ void zygiskd_start(void) {
           }
           case APatch: {
             memcpy(msg->data, "Root: APatch, Modules: None", strlen("Root: APatch, Modules: None"));
+
+            break;
+          }
+          case Magisk: {
+            memcpy(msg->data, "Root: Magisk, Modules: None", strlen("Root: Magisk, Modules: None"));
 
             break;
           }
@@ -446,6 +480,11 @@ void zygiskd_start(void) {
           }
           case APatch: {
             memcpy(msg->data, "Root: APatch, Modules: ", strlen("Root: APatch, Modules: "));
+
+            break;
+          }
+          case Magisk: {
+            memcpy(msg->data, "Root: Magisk, Modules: ", strlen("Root: Magisk, Modules: "));
 
             break;
           }
@@ -584,6 +623,11 @@ void zygiskd_start(void) {
 
             break;
           }
+          case Magisk: {
+            flags |= PROCESS_ROOT_IS_MAGISK;
+
+            break;
+          }
         }
 
         ret = write(client_fd, &flags, sizeof(flags));
@@ -608,6 +652,11 @@ void zygiskd_start(void) {
           }
           case APatch: {
             flags |= PROCESS_ROOT_IS_APATCH;
+
+            break;
+          }
+          case Magisk: {
+            flags |= PROCESS_ROOT_IS_MAGISK;
 
             break;
           }
@@ -673,31 +722,28 @@ void zygiskd_start(void) {
         size_t index = index_buf[0];
 
         struct Module *module = &context.modules[index];
-        int companion_fd = module->companion;
 
-        if (companion_fd != -1) {
+        if (module->companion != -1) {
           LOGI("Companion for module `%s` already exists\n", module->name);
 
-          if (!check_unix_socket(companion_fd, false)) {
+          if (!check_unix_socket(module->companion, false)) {
             LOGE("Poll companion for module `%s` crashed\n", module->name);
 
-            close(companion_fd);
+            close(module->companion);
             module->companion = -1;
           }
         }
 
-        if (companion_fd == -1) {
+        if (module->companion == -1) {
           LOGI("Spawning companion for `%s`\n", module->name);
 
-          companion_fd = spawn_companion(module->name, module->lib_fd);
+          module->companion = spawn_companion(module->name, module->lib_fd);
 
-          if (companion_fd != -1) {
+          if (module->companion != -1) {
             LOGI("Spawned companion for `%s`\n", module->name);
 
-            module->companion = companion_fd;
-
             /* INFO: Reversed params, may fix issues */
-            if (send_fd(companion_fd, client_fd) == -1) {
+            if (send_fd(module->companion, client_fd) == -1) {
               LOGE("Failed sending companion fd\n");
 
               uint8_t response = 0;
@@ -705,7 +751,7 @@ void zygiskd_start(void) {
               ASSURE_SIZE_WRITE_BREAK("RequestCompanionSocket", "response", ret, sizeof(response));
             }
           } else {
-            if (companion_fd == -2) {
+            if (module->companion == -2) {
               LOGI("Could not spawn companion for `%s` as it has no entry\n", module->name);
             } else {
               LOGI("Could not spawn companion for `%s` due to failures.\n", module->name);
@@ -716,7 +762,7 @@ void zygiskd_start(void) {
           ret = write(client_fd, &response, sizeof(response));
           ASSURE_SIZE_WRITE_BREAK("RequestCompanionSocket", "response", ret, sizeof(response));
 
-          LOGI("Companion fd: %d\n", companion_fd);
+          LOGI("Companion fd: %d\n", module->companion);
         }
 
         break;
@@ -753,10 +799,9 @@ void zygiskd_start(void) {
 
         break;
       }
-
-      /* INFO: Maybe we don't need to close? */
-      close(client_fd);
     }
+
+    close(client_fd);
 
     continue;
   }

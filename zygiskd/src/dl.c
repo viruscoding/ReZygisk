@@ -23,7 +23,7 @@ struct AndroidDlextinfo {
 
 void *android_dlopen_ext(const char *filename, int flags, const struct AndroidDlextinfo *extinfo);
 
-void *android_dlopen(char *path, u_int32_t flags) {
+void *android_dlopen(char *restrict path, uint32_t flags) {
   char *dir = dirname(path);
   struct AndroidDlextinfo info = {
     .flags = 0,

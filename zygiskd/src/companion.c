@@ -30,7 +30,7 @@ zygisk_companion_entry_func load_module(int fd) {
   return (zygisk_companion_entry_func)entry;
 }
 
-void *call_entry(void *arg) {
+void *call_entry(void *restrict arg) {
   int fd = *((int *)arg);
 
   struct stat st0;
@@ -92,7 +92,7 @@ void entry(int fd) {
   if (entry == NULL) {
     LOGI("No companion entry for: %s\n", name);
 
-    uint8_t response[1] = { 0 };
+    uint8_t response = 0;
     write(fd, &response, sizeof(response));
 
     exit(0);
@@ -102,7 +102,7 @@ void entry(int fd) {
 
   LOGI("Companion process created for: %s\n", name);
 
-  uint8_t response[1] = { 1 };
+  uint8_t response = 1;
   write(fd, &response, sizeof(response));
 
   while (1) {
@@ -114,21 +114,17 @@ void entry(int fd) {
       break;
     }
 
-    int client_fd;
-    recv_fd(fd, &client_fd);
+    int *client_fd = malloc(sizeof(int));
+    recv_fd(fd, client_fd);
 
-    LOGI("New companion request from module \"%s\" with fd \"%d\"\n", name, client_fd);
+    LOGI("New companion request from module \"%s\" with fd \"%d\"\n", name, *client_fd);
 
     write(fd, &response, sizeof(response));
-    
-    /* TODO: Do we really need to allocate this..? */
-    int *client_fd_ptr = malloc(sizeof(int));
-    *client_fd_ptr = client_fd;
 
     LOGI("Creating new thread for companion request\n");
 
     pthread_t thread;
-    pthread_create(&thread, NULL, call_entry, (void *)client_fd_ptr);
+    pthread_create(&thread, NULL, call_entry, (void *)client_fd);
     pthread_detach(thread);
   }
 }

@@ -7,7 +7,8 @@ enum RootImpl {
   None,
   Multiple,
   KernelSU,
-  APatch
+  APatch,
+  Magisk
 };
 
 void root_impls_setup(void);

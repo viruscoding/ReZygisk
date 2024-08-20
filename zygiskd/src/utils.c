@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <fcntl.h>
+#include <poll.h>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <sys/wait.h>
@@ -43,31 +44,53 @@ bool switch_mount_namespace(pid_t pid) {
 
 int __system_property_get(const char *, char *);
 
-void get_property(const char *name, char *output) {
+void get_property(const char *restrict name, char *restrict output) {
   __system_property_get(name, output);
 }
 
-void set_socket_create_context(const char *context) {
+void set_socket_create_context(const char *restrict context) {
   char path[PATH_MAX];
   snprintf(path, PATH_MAX, "/proc/thread-self/attr/sockcreate");
 
   FILE *sockcreate = fopen(path, "w");
   if (sockcreate == NULL) {
-    LOGE("Failed to open /proc/thread-self/attr/sockcreate: %s\n", strerror(errno));
+    LOGE("Failed to open /proc/thread-self/attr/sockcreate: %s Now trying to via gettid().\n", strerror(errno));
 
-    return;
+    goto fail;
   }
 
   if (fwrite(context, 1, strlen(context), sockcreate) != strlen(context)) {
-    LOGE("Failed to write to /proc/thread-self/attr/sockcreate: %s\n", strerror(errno));
+    LOGE("Failed to write to /proc/thread-self/attr/sockcreate: %s Now trying to via gettid().\n", strerror(errno));
 
-    return;
+    fclose(sockcreate);
+
+    goto fail;
   }
 
   fclose(sockcreate);
+
+  return;
+
+  fail:
+    snprintf(path, PATH_MAX, "/proc/self/task/%d/attr/sockcreate", gettid());
+
+    sockcreate = fopen(path, "w");
+    if (sockcreate == NULL) {
+      LOGE("Failed to open %s: %s\n", path, strerror(errno));
+
+      return;
+    }
+
+    if (fwrite(context, 1, strlen(context), sockcreate) != strlen(context)) {
+      LOGE("Failed to write to %s: %s\n", path, strerror(errno));
+
+      return;
+    }
+
+    fclose(sockcreate);
 }
 
-static void get_current_attr(char *output) {
+static void get_current_attr(char *restrict output, size_t size) {
   char path[PATH_MAX];
   snprintf(path, PATH_MAX, "/proc/self/attr/current");
 
@@ -78,8 +101,8 @@ static void get_current_attr(char *output) {
     return;
   }
 
-  if (fgets(output, PATH_MAX, current) == NULL) {
-    LOGE("fgets: %s\n", strerror(errno));
+  if (fread(output, 1, size, current) == 0) {
+    LOGE("fread: %s\n", strerror(errno));
 
     return;
   }
@@ -87,9 +110,9 @@ static void get_current_attr(char *output) {
   fclose(current);
 }
 
-void unix_datagram_sendto(const char *path, void *buf, size_t len) {
+void unix_datagram_sendto(const char *restrict path, void *restrict buf, size_t len) {
   char current_attr[PATH_MAX];
-  get_current_attr(current_attr);
+  get_current_attr(current_attr, sizeof(current_attr));
 
   set_socket_create_context(current_attr);
 
@@ -122,14 +145,14 @@ void unix_datagram_sendto(const char *path, void *buf, size_t len) {
   close(socket_fd);
 }
 
-int chcon(const char *path, const char *context) {
+int chcon(const char *restrict path, const char *context) {
   char command[PATH_MAX];
   snprintf(command, PATH_MAX, "chcon %s %s", context, path);
 
   return system(command);
 }
 
-int unix_listener_from_path(char *path) {
+int unix_listener_from_path(char *restrict path) {
   if (remove(path) == -1 && errno != ENOENT) {
     LOGE("remove: %s\n", strerror(errno));
 
@@ -143,10 +166,9 @@ int unix_listener_from_path(char *path) {
     return -1;
   }
 
-  struct sockaddr_un addr;
-
-  memset(&addr, 0, sizeof(struct sockaddr_un));
-  addr.sun_family = AF_UNIX;
+  struct sockaddr_un addr = {
+    .sun_family = AF_UNIX
+  };
   strncpy(addr.sun_path, path, sizeof(addr.sun_path) - 1);
 
   if (bind(socket_fd, (struct sockaddr *)&addr, sizeof(struct sockaddr_un)) == -1) {
@@ -204,7 +226,7 @@ ssize_t send_fd(int sockfd, int fd) {
   return sent_bytes;
 }
 
-ssize_t recv_fd(int sockfd, int *fd) {
+ssize_t recv_fd(int sockfd, int *restrict fd) {
   char control_buf[CMSG_SPACE(sizeof(int))];
   memset(control_buf, 0, sizeof(control_buf));
 
@@ -234,7 +256,7 @@ ssize_t recv_fd(int sockfd, int *fd) {
   return received_bytes;
 }
 
-ssize_t write_string(int fd, const char *str) {
+ssize_t write_string(int fd, const char *restrict str) {
   size_t len = strlen(str);
 
   ssize_t written_bytes = write(fd, &len, sizeof(len));
@@ -254,7 +276,7 @@ ssize_t write_string(int fd, const char *str) {
   return written_bytes;
 }
 
-ssize_t read_string(int fd, char *str, size_t len) {
+ssize_t read_string(int fd, char *restrict str, size_t len) {
   size_t str_len_buf[1];
 
   ssize_t read_bytes = read(fd, &str_len_buf, sizeof(str_len_buf));
@@ -282,7 +304,8 @@ ssize_t read_string(int fd, char *str, size_t len) {
   return read_bytes;
 }
 
-bool exec_command(char *buf, size_t len, const char *file, char *const argv[]) {
+/* INFO: Cannot use restrict here as execv does not have restrict */
+bool exec_command(char *restrict buf, size_t len, const char *restrict file, char *const argv[]) {
   int link[2];
   pid_t pid;
 
@@ -308,10 +331,55 @@ bool exec_command(char *buf, size_t len, const char *file, char *const argv[]) {
     close(link[1]);
 
     int nbytes = read(link[0], buf, len);
-    buf[nbytes] = '\0';
+    buf[nbytes - 1] = '\0';
 
     wait(NULL);
   }
 
   return true;
+}
+
+bool check_unix_socket(int fd, bool block) {
+  struct pollfd pfd = {
+    .fd = fd,
+    .events = POLLIN,
+    .revents = 0
+  };
+
+  int timeout = block ? -1 : 0;
+  poll(&pfd, 1, timeout);
+
+  return (pfd.revents & !POLLIN) != 0 ? false : true;
+}
+
+/* INFO: Cannot use restrict here as execv does not have restrict */
+int non_blocking_execv(const char *restrict file, char *const argv[]) {
+  int link[2];
+  pid_t pid;
+
+  if (pipe(link) == -1) {
+    LOGE("pipe: %s\n", strerror(errno));
+
+    return -1;
+  }
+
+  if ((pid = fork()) == -1) {
+    LOGE("fork: %s\n", strerror(errno));
+
+    return -1;
+  }
+
+  if (pid == 0) {
+    dup2(link[1], STDOUT_FILENO);
+    close(link[0]);
+    close(link[1]);
+
+    execv(file, argv);
+  } else {
+    close(link[1]);
+
+    return link[0];
+  }
+
+  return -1;
 }

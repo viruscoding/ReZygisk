@@ -53,6 +53,7 @@ val Files = arrayOf(
   "root_impl/apatch.c",
   "root_impl/common.c",
   "root_impl/kernelsu.c",
+  "root_impl/magisk.c",
   "companion.c",
   "dl.c",
   "main.c",

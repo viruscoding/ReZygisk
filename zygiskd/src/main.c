@@ -11,7 +11,7 @@
 
 #include "utils.h"
 
-int __android_log_print(int prio, const char *tag,  const char *fmt, ...);
+int __android_log_print(int prio, const char *tag, const char *fmt, ...);
 
 int main(int argc, char *argv[]) {
   LOGI("Initializing zygiskd: %s\n", argv[0]);
@@ -60,6 +60,11 @@ int main(int argc, char *argv[]) {
         }
         case APatch: {
           LOGI("APatch root implementation found.\n");
+
+          return 0;
+        }
+        case Magisk: {
+          LOGI("Magisk root implementation found.\n");
 
           return 0;
         }
