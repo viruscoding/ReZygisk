@@ -57,7 +57,7 @@ bool _apatch_get_package_config(struct packages_config *restrict config) {
     return false;
   }
 
-  char line[1024];
+  char line[1024 * 2];
   /* INFO: Skip the CSV header */
   fgets(line, sizeof(line), fp);
 

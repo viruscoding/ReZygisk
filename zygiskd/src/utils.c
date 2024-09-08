@@ -18,6 +18,10 @@
 
 #include "utils.h"
 
+/* INFO 50ms wait */
+// #define ALLOW_WAIT_ON_DEBUG() usleep(500 * 1000)
+#define ALLOW_WAIT_ON_DEBUG() {}
+
 bool switch_mount_namespace(pid_t pid) {
   char path[PATH_MAX];
   snprintf(path, sizeof(path), "/proc/%d/ns/mnt", pid);
@@ -192,82 +196,114 @@ int unix_listener_from_path(char *restrict path) {
   return socket_fd;
 }
 
-ssize_t send_fd(int sockfd, int fd) {
-  char control_buf[CMSG_SPACE(sizeof(int))];
-  memset(control_buf, 0, sizeof(control_buf));
-
-  int cnt = 1;
+ssize_t gwrite_fd(int fd, int sendfd) {
+  char cmsgbuf[CMSG_SPACE(sizeof(int))];
+  char buf[1] = { 0 };
+  
   struct iovec iov = {
-    .iov_base = &cnt,
-    .iov_len  = sizeof(cnt)
+    .iov_base = buf,
+    .iov_len = 1
   };
 
   struct msghdr msg = {
     .msg_iov = &iov,
     .msg_iovlen = 1,
-    .msg_control = control_buf,
-    .msg_controllen = sizeof(control_buf)
+    .msg_control = cmsgbuf,
+    .msg_controllen = sizeof(cmsgbuf)
   };
 
   struct cmsghdr *cmsg = CMSG_FIRSTHDR(&msg);
+  cmsg->cmsg_len = CMSG_LEN(sizeof(int));
   cmsg->cmsg_level = SOL_SOCKET;
   cmsg->cmsg_type = SCM_RIGHTS;
-  cmsg->cmsg_len = CMSG_LEN(sizeof(int));
 
-  memcpy(CMSG_DATA(cmsg), &fd, sizeof(int));
+  memcpy(CMSG_DATA(cmsg), &sendfd, sizeof(int));
 
-  ssize_t sent_bytes = sendmsg(sockfd, &msg, 0);
-  if (sent_bytes == -1) {
-    LOGE("Failed to send fd: %s\n", strerror(errno));
+  ssize_t ret = sendmsg(fd, &msg, 0);
+  if (ret == -1) {
+    LOGE("sendmsg: %s\n", strerror(errno));
 
     return -1;
   }
 
-  return sent_bytes;
+  return ret;
 }
 
-ssize_t recv_fd(int sockfd, int *restrict fd) {
-  char control_buf[CMSG_SPACE(sizeof(int))];
-  memset(control_buf, 0, sizeof(control_buf));
-
-  int cnt = 1;
+int gread_fd(int fd) {
+  char cmsgbuf[CMSG_SPACE(sizeof(int))];
+  char buf[1] = { 0 };
+  
   struct iovec iov = {
-    .iov_base = &cnt,
-    .iov_len  = sizeof(cnt)
+    .iov_base = buf,
+    .iov_len = 1
   };
 
   struct msghdr msg = {
     .msg_iov = &iov,
     .msg_iovlen = 1,
-    .msg_control = control_buf,
-    .msg_controllen = sizeof(control_buf)
+    .msg_control = cmsgbuf,
+    .msg_controllen = sizeof(cmsgbuf)
   };
 
-  ssize_t received_bytes = recvmsg(sockfd, &msg, 0);
-  if (received_bytes == -1) {
-    LOGE("Failed to read fd: %s\n", strerror(errno));
+  ssize_t ret = recvmsg(fd, &msg, 0);
+  if (ret == -1) {
+    LOGE("recvmsg: %s\n", strerror(errno));
 
     return -1;
   }
 
   struct cmsghdr *cmsg = CMSG_FIRSTHDR(&msg);
-  memcpy(fd, CMSG_DATA(cmsg), sizeof(int));
-
-  return received_bytes;
-}
-
-ssize_t write_string(int fd, const char *restrict str) {
-  size_t len = strlen(str);
-
-  ssize_t written_bytes = write(fd, &len, sizeof(len));
-  if (written_bytes != sizeof(len)) {
-    LOGE("Failed to write string length: %s\n", strerror(errno));
+  if (cmsg == NULL) {
+    LOGE("CMSG_FIRSTHDR: %s\n", strerror(errno));
 
     return -1;
   }
 
-  written_bytes = write(fd, str, len);
-  if ((size_t)written_bytes != len) {
+  int sendfd;
+  memcpy(&sendfd, CMSG_DATA(cmsg), sizeof(int));
+
+  return sendfd;
+}
+
+#define write_func(type)                    \
+  ssize_t write_## type(int fd, type val) { \
+    ALLOW_WAIT_ON_DEBUG();                  \
+                                            \
+    return write(fd, &val, sizeof(type));   \
+  }
+
+#define read_func(type)                     \
+  ssize_t read_## type(int fd, type *val) { \
+    return read(fd, val, sizeof(type));     \
+  }
+
+write_func(int)
+read_func(int)
+
+write_func(size_t)
+read_func(size_t)
+
+write_func(uint32_t)
+read_func(uint32_t)
+
+write_func(uint8_t)
+read_func(uint8_t)
+
+ssize_t write_string(int fd, const char *restrict str) {
+  size_t len[1];
+  len[0] = strlen(str);
+
+  ALLOW_WAIT_ON_DEBUG();
+
+  ssize_t written_bytes = write(fd, &len, sizeof(size_t));
+  if (written_bytes != sizeof(size_t)) {
+    LOGE("Failed to write string length: Not all bytes were written (%zd != %zu).\n", written_bytes, sizeof(size_t));
+
+    return -1;
+  }
+
+  written_bytes = write(fd, str, len[0]);
+  if ((size_t)written_bytes != len[0]) {
     LOGE("Failed to write string: Not all bytes were written.\n");
 
     return -1;
@@ -279,9 +315,9 @@ ssize_t write_string(int fd, const char *restrict str) {
 ssize_t read_string(int fd, char *restrict str, size_t len) {
   size_t str_len_buf[1];
 
-  ssize_t read_bytes = read(fd, &str_len_buf, sizeof(str_len_buf));
-  if (read_bytes != (ssize_t)sizeof(str_len_buf)) {
-    LOGE("Failed to read string length: %s\n", strerror(errno));
+  ssize_t read_bytes = read(fd, &str_len_buf, sizeof(size_t));
+  if (read_bytes != (ssize_t)sizeof(size_t)) {
+    LOGE("Failed to read string length: Not all bytes were read (%zd != %zu).\n", read_bytes, sizeof(size_t));
 
     return -1;
   }
@@ -296,7 +332,7 @@ ssize_t read_string(int fd, char *restrict str, size_t len) {
 
   read_bytes = read(fd, str, str_len);
   if (read_bytes != (ssize_t)str_len) {
-    LOGE("Failed to read string: Not all bytes were read (%zd != %zu).\n", read_bytes, str_len);
+    LOGE("Failed to read string: Promised bytes doesn't exist (%zd != %zu).\n", read_bytes, str_len);
 
     return -1;
   }
@@ -349,7 +385,7 @@ bool check_unix_socket(int fd, bool block) {
   int timeout = block ? -1 : 0;
   poll(&pfd, 1, timeout);
 
-  return (pfd.revents & !POLLIN) != 0 ? false : true;
+  return pfd.revents & ~POLLIN ? false : true;
 }
 
 /* INFO: Cannot use restrict here as execv does not have restrict */

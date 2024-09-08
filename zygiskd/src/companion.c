@@ -6,6 +6,7 @@
 #include <sys/stat.h>
 #include <dlfcn.h>
 #include <errno.h>
+#include <fcntl.h>
 
 #include <unistd.h>
 #include <linux/limits.h>
@@ -19,6 +20,11 @@
 
 typedef void (*zygisk_companion_entry_func)(int);
 
+struct companion_module_thread_args {
+  int fd;
+  zygisk_companion_entry_func entry;
+};
+
 zygisk_companion_entry_func load_module(int fd) {
   char path[PATH_MAX];
   snprintf(path, sizeof(path), "/proc/self/fd/%d", fd);
@@ -30,101 +36,100 @@ zygisk_companion_entry_func load_module(int fd) {
   return (zygisk_companion_entry_func)entry;
 }
 
-void *call_entry(void *restrict arg) {
-  int fd = *((int *)arg);
+void *entry_thread(void *arg) {
+  struct companion_module_thread_args *args = (struct companion_module_thread_args *)arg;
+
+  int fd = args->fd;
+  zygisk_companion_entry_func module_entry = args->entry;
 
   struct stat st0;
-  if (fstat(fd, &st0) == -1) {
-    LOGE("Failed to stat client fd\n");
+  fstat(fd, &st0);
 
-    free(arg);
+  LOGI("New companion thread (inside the thread!).\n - Client fd: %d\n", fd);
 
-    exit(0);
-  }
-  entry(fd);
+  module_entry(fd);
 
-  // Only close client if it is the same file so we don't
-  // accidentally close a re-used file descriptor.
-  // This check is required because the module companion
-  // handler could've closed the file descriptor already.
+  /* TODO: Is this even necessary? */
   struct stat st1;
-  if (fstat(fd, &st1) == -1) {
-    LOGE("Failed to stat client fd\n");
+  if (fstat(fd, &st1) != -1) {
+    if (st0.st_dev != st1.st_dev || st0.st_ino != st1.st_ino) {
+      close(fd);
 
-    free(arg);
-
-    exit(0);
+      LOGI("Client fd has been replaced. Bye!\n");
+    }
   }
 
-  if (st0.st_dev != st1.st_dev || st0.st_ino != st1.st_ino) {
-    close(fd);
-  }
+  free(args);
 
-  free(arg);
+  pthread_exit(NULL);
 
   return NULL;
 }
 
 void entry(int fd) {
-  LOGI("companion entry fd: |%d|\n", fd);
+  LOGI("New companion entry.\n - Client fd: %d\n", fd);
 
-  char name[256 + 1];
-  ssize_t ret = read_string(fd, name, sizeof(name) - 1);
-  if (ret == -1) return;
+  char name[256];
+  ssize_t ret = read_string(fd, name, sizeof(name));
+  if (ret == -1) {
+    LOGE("Failed to read module name\n");
 
-  name[ret] = '\0';
-
-  LOGI("Companion process requested for `%s`\n", name);
-
-  int library_fd;
-  recv_fd(fd, &library_fd);
-
-  LOGI("Library fd: %d\n", library_fd);
-
-  zygisk_companion_entry_func entry = load_module(library_fd);
-
-  LOGI("Library loaded\n");
-
-  close(library_fd);
-
-  LOGI("Library closed\n");
-
-  if (entry == NULL) {
-    LOGI("No companion entry for: %s\n", name);
-
-    uint8_t response = 0;
+    uint8_t response = 2;
     write(fd, &response, sizeof(response));
 
     exit(0);
-
-    return;
   }
 
-  LOGI("Companion process created for: %s\n", name);
+  LOGI(" - Module name: `%.*s`\n", (int)ret, name);
 
-  uint8_t response = 1;
-  write(fd, &response, sizeof(response));
+  int library_fd = gread_fd(fd);
+  if (library_fd == -1) {
+    LOGE("Failed to receive library fd\n");
+
+    uint8_t response = 2;
+    write(fd, &response, sizeof(response));
+
+    exit(0);
+  }
+
+  LOGI(" - Library fd: %d\n", library_fd);
+
+  zygisk_companion_entry_func module_entry = load_module(library_fd);
+  close(library_fd);
+
+  if (module_entry == NULL) {
+    LOGI("No companion module entry for module: %.*s\n", (int)ret, name);
+
+    write_int(fd, 0);
+
+    exit(0);
+  } else {
+    write_int(fd, 1);
+  }
 
   while (1) {
     if (!check_unix_socket(fd, true)) {
-      LOGI("Something went wrong. Bye!\n");
+      LOGI("Something went wrong in companion. Bye!\n");
 
       exit(0);
 
       break;
     }
 
-    int *client_fd = malloc(sizeof(int));
-    recv_fd(fd, client_fd);
+    struct companion_module_thread_args *args = malloc(sizeof(struct companion_module_thread_args));
+    args->entry = module_entry;
+  
+    if ((args->fd = gread_fd(fd)) == -1) {
+      LOGE("Failed to receive client fd\n");
 
-    LOGI("New companion request from module \"%s\" with fd \"%d\"\n", name, *client_fd);
+      exit(0);
+    }
 
-    write(fd, &response, sizeof(response));
+    LOGI("New companion request.\n - Module name: %.*s\n - Client fd: %d\n", (int)ret, name, args->fd);
 
-    LOGI("Creating new thread for companion request\n");
-
+    write_uint8_t(args->fd, 1);
+    
     pthread_t thread;
-    pthread_create(&thread, NULL, call_entry, (void *)client_fd);
-    pthread_detach(thread);
+    pthread_create(&thread, NULL, entry_thread, args);
   }
 }

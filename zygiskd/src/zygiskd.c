@@ -9,6 +9,7 @@
 #include <sys/sendfile.h>
 #include <fcntl.h>
 #include <errno.h>
+#include <stdio.h>
 
 #include <unistd.h>
 #include <linux/limits.h>
@@ -173,26 +174,10 @@ static void load_modules(enum Architecture arch, struct Context *restrict contex
 
   char arch_str[32];
   switch (arch) {
-    case ARM32: {
-      strcpy(arch_str, "armeabi-v7a");
-
-      break;
-    }
-    case ARM64: {
-      strcpy(arch_str, "arm64-v8a");
-
-      break;
-    }
-    case X86: {
-      strcpy(arch_str, "x86");
-  
-      break;
-    }
-    case X86_64: {
-      strcpy(arch_str, "x86_64");
-
-      break;
-    }
+    case ARM64: { strcpy(arch_str, "arm64-v8a"); break; }
+    case X86_64: { strcpy(arch_str, "x86_64"); break; }
+    case ARM32: { strcpy(arch_str, "armeabi-v7a"); break; }
+    case X86: { strcpy(arch_str, "x86"); break; }
   }
 
   LOGI("Loading modules for architecture: %s\n", arch_str);
@@ -258,7 +243,9 @@ static int create_daemon_socket(void) {
   return unix_listener_from_path(PATH_CP_NAME);
 }
 
-static int spawn_companion(char *restrict name, int lib_fd) {
+static int spawn_companion(char *restrict argv[], char *restrict name, int lib_fd) {
+  LOGI("Spawning a new companion...\n");
+
   int sockets[2];
   if (socketpair(AF_UNIX, SOCK_STREAM, 0, sockets) == -1) {
     LOGE("Failed creating socket pair.\n");
@@ -269,11 +256,7 @@ static int spawn_companion(char *restrict name, int lib_fd) {
   int daemon_fd = sockets[0];
   int companion_fd = sockets[1];
 
-  LOGI("Companion fd: %d\n", companion_fd);
-  LOGI("Daemon fd: %d\n", daemon_fd);
-
   pid_t pid = fork();
-  LOGI("Forked: %d\n", pid);
   if (pid < 0) {
     LOGE("Failed forking companion: %s\n", strerror(errno));
 
@@ -284,74 +267,89 @@ static int spawn_companion(char *restrict name, int lib_fd) {
   } else if (pid > 0) {
     close(companion_fd);
 
-    LOGI("Waiting for companion to start (%d)\n", pid);
-
     int status = 0;
     waitpid(pid, &status, 0);
 
-    LOGI("Companion exited with status %d\n", status);
-
     if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
       if (write_string(daemon_fd, name) == -1) {
-        LOGE("Failed sending module name\n");
+        LOGE("Failed writing module name.\n");
+
+        close(daemon_fd);
 
         return -1;
       }
-      if (send_fd(daemon_fd, lib_fd) == -1) {
-        LOGE("Failed sending lib fd\n");
+      if (gwrite_fd(daemon_fd, lib_fd) == -1) {
+        LOGE("Failed sending library fd.\n");
+
+        close(daemon_fd);
 
         return -1;
       }
-
-      LOGI("Sent module name and lib fd\n");
       
-      uint8_t response_buf[1];
-      ssize_t ret = read(daemon_fd, &response_buf, sizeof(response_buf));
-      ASSURE_SIZE_READ_WR("companion", "response", ret, sizeof(response_buf));
-
-      LOGI("Companion response: %hhu\n", response_buf[0]);
-
-      if (response_buf[0] == 0) {
-        close(daemon_fd);
-
-        return -1;
-      } else if (response_buf[0] == 1) return daemon_fd;
-      else {
-        LOGE("Invalid response from companion: %hhu\n", response_buf[0]);
+      uint8_t response = 0;
+      ssize_t ret = read_uint8_t(daemon_fd, &response);
+      if (ret <= 0) {
+        LOGE("Failed reading companion response.\n");
 
         close(daemon_fd);
 
         return -1;
       }
+
+      LOGI("Companion response: %hhu\n", response);
+
+      switch (response) {
+        /* INFO: Even without any entry, we should still just deal with it */
+        case 0: { return -2; }
+        case 1: { return daemon_fd; }
+        /* TODO: Should we be closing daemon socket here? (in non-0-and-1 case) */
+        default: {
+          return -1;
+        }
+      }
+      /* TODO: Should we be closing daemon socket here? */
     } else {
       LOGE("Exited with status %d\n", status);
-
-      close(daemon_fd);
 
       return -1;
     }
   /* INFO: if pid == 0: */
   } else {
-    LOGI("Companion started\n");
     /* INFO: There is no case where this will fail with a valid fd. */
-    fcntl(companion_fd, F_SETFD, 0);
+    /* INFO: Remove FD_CLOEXEC flag to avoid closing upon exec */
+    if (fcntl(companion_fd, F_SETFD, 0) == -1) {
+      LOGE("Failed removing FD_CLOEXEC flag: %s\n", strerror(errno));
+
+      close(companion_fd);
+      close(daemon_fd);
+
+      exit(1);
+    }
   }
 
+  char *process = argv[0];
+  char nice_name[256];
+  char *last = strrchr(process, '/');
+  if (last == NULL) {
+    snprintf(nice_name, sizeof(nice_name), "%s", process);
+  } else {
+    snprintf(nice_name, sizeof(nice_name), "%s", last + 1);
+  }
+
+  char process_name[256];
+  snprintf(process_name, sizeof(process_name), "%s-%s", nice_name, name);
+
   char companion_fd_str[32];
-  snprintf(companion_fd_str, 32, "%d", companion_fd);
+  snprintf(companion_fd_str, sizeof(companion_fd_str), "%d", companion_fd);
 
-  LOGI("Executing companion...\n");
-
-  char *argv[] = { ZYGISKD_FILE, "companion", companion_fd_str, NULL };
-  if (non_blocking_execv(ZYGISKD_PATH, argv) == -1) {
+  char *eargv[] = { process_name, "companion", companion_fd_str, NULL };
+  if (non_blocking_execv(ZYGISKD_PATH, eargv) == -1) {
     LOGE("Failed executing companion: %s\n", strerror(errno));
 
     close(companion_fd);
 
     exit(1);
   }
-
-  LOGI("Bye bye!\n");
 
   exit(0);
 }
@@ -362,7 +360,7 @@ struct __attribute__((__packed__)) MsgHead {
   char data[0];
 };
 
-void zygiskd_start(void) {
+void zygiskd_start(char *restrict argv[]) {
   LOGI("Welcome to ReZygisk %s!\n", ZKSU_VERSION);
 
   enum RootImpl impl = get_impl();
@@ -517,10 +515,8 @@ void zygiskd_start(void) {
       return;
     }
 
-    LOGI("Accepted client: %d\n", client_fd);
-
-    uint8_t buf[1];
-    ssize_t len = read(client_fd, buf, sizeof(buf));
+    uint8_t action8 = 0;
+    ssize_t len = read_uint8_t(client_fd, &action8);
     if (len == -1) {
       LOGE("read: %s\n", strerror(errno));
 
@@ -531,17 +527,22 @@ void zygiskd_start(void) {
       return;
     }
 
-    LOGI("Action: %hhu\n", buf[0]);
-    enum DaemonSocketAction action = (enum DaemonSocketAction)buf[0];
+    enum DaemonSocketAction action = (enum DaemonSocketAction)action8;
 
     switch (action) {
       case PingHeartbeat: {
+        LOGI("ZD-- PingHeartbeat\n");
+
         enum DaemonSocketAction msgr = ZYGOTE_INJECTED;
         unix_datagram_sendto(CONTROLLER_SOCKET, &msgr, sizeof(enum DaemonSocketAction));
+
+        LOGI("ZD++ PingHeartbeat\n");
 
         break;
       }
       case ZygoteRestart: {
+        LOGI("ZD-- ZygoteRestart\n");
+
         for (int i = 0; i < context.len; i++) {
           if (context.modules[i].companion != -1) {
             close(context.modules[i].companion);
@@ -549,36 +550,40 @@ void zygiskd_start(void) {
           }
         }
 
+        LOGI("ZD++ ZygoteRestart\n");
+
         break;
       }
       case SystemServerStarted: {
+        LOGI("ZD-- SystemServerStarted\n");
+
         enum DaemonSocketAction msgr = SYSTEM_SERVER_STARTED;
         unix_datagram_sendto(CONTROLLER_SOCKET, &msgr, sizeof(enum DaemonSocketAction));
 
+        LOGI("ZD++ SystemServerStarted\n");
+
         break;
       }
-      /* TODO: May need to move to another thread? :/ */
       case RequestLogcatFd: {
-        uint8_t level_buf[1];
-        ssize_t ret = read(client_fd, &level_buf, sizeof(level_buf));
-        ASSURE_SIZE_READ_BREAK("RequestLogcatFd", "level", ret, sizeof(level_buf));
-
-        uint8_t level = level_buf[0];
+        uint8_t level = 0;
+        ssize_t ret = read_uint8_t(client_fd, &level);
+        ASSURE_SIZE_READ_BREAK("RequestLogcatFd", "level", ret, sizeof(level));
 
         char tag[128 + 1];
         ret = read_string(client_fd, tag, sizeof(tag) - 1);
         if (ret == -1) {
-          LOGE("Failed reading tag\n");
+          LOGE("Failed reading logcat tag.\n");
 
           break;
         }
 
         tag[ret] = '\0';
 
+        /* INFO: Non-NULL terminated */
         char message[1024];
         ret = read_string(client_fd, message, sizeof(message));
         if (ret == -1) {
-          LOGE("Failed reading message\n");
+          LOGE("Failed reading logcat message.\n");
 
           break;
         }
@@ -588,13 +593,11 @@ void zygiskd_start(void) {
         break;
       }
       case GetProcessFlags: {
-        LOGI("Getting process flags\n");
+        LOGI("ZD-- GetProcessFlags\n");
 
-        uint32_t uid_buf[1];
-        ssize_t ret = read(client_fd, &uid_buf, sizeof(uid_buf));
-        ASSURE_SIZE_READ_BREAK("GetProcessFlags", "uid", ret, sizeof(uid_buf));
-
-        uint32_t uid = uid_buf[0];
+        uint32_t uid = 0;
+        ssize_t ret = read_uint32_t(client_fd, &uid);
+        ASSURE_SIZE_READ_BREAK("GetProcessFlags", "uid", ret, sizeof(uid));
 
         uint32_t flags = 0;
         if (uid_is_manager(uid)) {
@@ -608,8 +611,6 @@ void zygiskd_start(void) {
           }
         }
 
-        LOGI("Flags for uid %d: %d\n", uid, flags);
-
         switch (get_impl()) {
           case None: { break; }
           case Multiple: { break; }
@@ -630,17 +631,17 @@ void zygiskd_start(void) {
           }
         }
 
-        ret = write(client_fd, &flags, sizeof(flags));
+        ret = write_int(client_fd, flags);
         ASSURE_SIZE_WRITE_BREAK("GetProcessFlags", "flags", ret, sizeof(flags));
 
-        LOGI("Sent flags\n");
+        LOGI("ZD++ GetProcessFlags\n");
 
         break;
       }
       case GetInfo: {
-        uint32_t flags = 0;
+        LOGI("ZD-- GetInfo\n");
 
-        LOGI("Getting info\n");
+        uint32_t flags = 0;
 
         switch (get_impl()) {
           case None: { break; }
@@ -662,72 +663,52 @@ void zygiskd_start(void) {
           }
         }
 
-        LOGI("Flags: %d\n", flags);
-
-        ssize_t ret = write(client_fd, &flags, sizeof(flags));
+        ssize_t ret = write_size_t(client_fd, flags);
         ASSURE_SIZE_WRITE_BREAK("GetInfo", "flags", ret, sizeof(flags));
 
-        uint32_t pid = getpid();
-
-        LOGI("Getting pid: %d\n", pid);
-    
-        ret = write(client_fd, &pid, sizeof(pid));
+        uint32_t pid = getpid();    
+        ret = write_uint32_t(client_fd, pid);
         ASSURE_SIZE_WRITE_BREAK("GetInfo", "pid", ret, sizeof(pid));
 
-        LOGI("Sent pid\n");
-
         size_t modules_len = context.len;
-        ret = write(client_fd, &modules_len, sizeof(modules_len));
+        ret = write_size_t(client_fd, modules_len);
         
         for (size_t i = 0; i < modules_len; i++) {
           write_string(client_fd, context.modules[i].name);
         }
 
+        LOGI("ZD++ GetInfo\n");
+
         break;
       }
       case ReadModules: {
-        LOGI("Reading modules to stream\n");
+        LOGI("ZD-- ReadModules\n");
 
         size_t clen = context.len;
-        ssize_t ret = write(client_fd, &clen, sizeof(clen));
+        ssize_t ret = write_size_t(client_fd, clen);
         ASSURE_SIZE_WRITE_BREAK("ReadModules", "len", ret, sizeof(clen));
 
         for (size_t i = 0; i < clen; i++) {
-          LOGI("Hey, we're talking about: %zu, with name and lib_fd: %s, %d\n", i, context.modules[i].name, context.modules[i].lib_fd);
-
-          if (write_string(client_fd, context.modules[i].name) == -1) {
-            LOGE("Failed writing module name\n");
-
-            break;
-          }
-
-          if (send_fd(client_fd, context.modules[i].lib_fd) == -1) {
-            LOGE("Failed sending lib fd\n");
-
-            break;
-          }
+          if (write_string(client_fd, context.modules[i].name) == -1) break;
+          if (gwrite_fd(client_fd, context.modules[i].lib_fd) == -1) break;
         }
 
-        LOGI("Finished reading modules to stream\n");
+        LOGI("ZD++ ReadModules\n");
 
         break;
       }
       case RequestCompanionSocket: {
-        LOGI("Requesting companion socket\n");
-      
-        size_t index_buf[1];
-        ssize_t ret = read(client_fd, &index_buf, sizeof(index_buf));
-        ASSURE_SIZE_READ_BREAK("RequestCompanionSocket", "index", ret, sizeof(index_buf));
+        LOGI("ZD-- RequestCompanionSocket\n");
 
-        size_t index = index_buf[0];
+        size_t index = 0;
+        ssize_t ret = read_size_t(client_fd, &index);
+        ASSURE_SIZE_READ_BREAK("RequestCompanionSocket", "index", ret, sizeof(index));
 
         struct Module *module = &context.modules[index];
 
         if (module->companion != -1) {
-          LOGI("Companion for module `%s` already exists\n", module->name);
-
           if (!check_unix_socket(module->companion, false)) {
-            LOGE("Poll companion for module `%s` crashed\n", module->name);
+            LOGE("  Poll companion for module \"%s\" crashed\n", module->name);
 
             close(module->companion);
             module->companion = -1;
@@ -735,73 +716,73 @@ void zygiskd_start(void) {
         }
 
         if (module->companion == -1) {
-          LOGI("Spawning companion for `%s`\n", module->name);
+          module->companion = spawn_companion(argv, module->name, module->lib_fd);
 
-          module->companion = spawn_companion(module->name, module->lib_fd);
-
-          if (module->companion != -1) {
-            LOGI("Spawned companion for `%s`\n", module->name);
-
-            /* INFO: Reversed params, may fix issues */
-            if (send_fd(module->companion, client_fd) == -1) {
-              LOGE("Failed sending companion fd\n");
-
-              uint8_t response = 0;
-              ret = write(client_fd, &response, sizeof(response));
-              ASSURE_SIZE_WRITE_BREAK("RequestCompanionSocket", "response", ret, sizeof(response));
-            }
+          if (module->companion > 0) {
+            LOGI("  Spawned companion for \"%s\"\n", module->name);
           } else {
             if (module->companion == -2) {
-              LOGI("Could not spawn companion for `%s` as it has no entry\n", module->name);
+              LOGE("  No companion spawned for \"%s\" because it has no entry.\n", module->name);
             } else {
-              LOGI("Could not spawn companion for `%s` due to failures.\n", module->name);
+              LOGE("  Failed to spawn companion for \"%s\": %s\n", module->name, strerror(errno));
             }
           }
-
-          uint8_t response = 0;
-          ret = write(client_fd, &response, sizeof(response));
-          ASSURE_SIZE_WRITE_BREAK("RequestCompanionSocket", "response", ret, sizeof(response));
-
-          LOGI("Companion fd: %d\n", module->companion);
         }
+
+        if (module->companion != -1) {
+          if (gwrite_fd(module->companion, client_fd) == -1) {
+            LOGE("Failed to send companion fd socket of module \"%s\"\n", module->name);
+
+            ret = write_int(client_fd, 0);
+            ASSURE_SIZE_WRITE_BREAK("RequestCompanionSocket", "response", ret, sizeof(int));
+          }
+        } else {
+          ret = write_int(client_fd, 0);
+          ASSURE_SIZE_WRITE_BREAK("RequestCompanionSocket", "response", ret, sizeof(int));
+        }
+
+        LOGI("ZD++ RequestCompanionSocket\n");
 
         break;
       }
       case GetModuleDir: {
-        LOGI("Getting module directory\n");
+        LOGI("ZD-- GetModuleDir\n");
 
-        size_t index_buf[1];
-        ssize_t ret = read(client_fd, &index_buf, sizeof(index_buf));
-        ASSURE_SIZE_READ_BREAK("GetModuleDir", "index", ret, sizeof(index_buf));
+        size_t index = 0;
+        read_size_t(client_fd, &index);
 
-        size_t index = index_buf[0];
+        char module_dir[PATH_MAX];
+        snprintf(module_dir, PATH_MAX, "%s/%s", PATH_MODULES_DIR, context.modules[index].name);
 
-        LOGI("Index: %zu\n", index);
-
-        char dir[PATH_MAX];
-        snprintf(dir, PATH_MAX, "%s/%s", PATH_MODULES_DIR, context.modules[index].name);
-
-        LOGI("Module directory: %s\n", dir);
-        /* INFO: Maybe not read only? */
-        int dir_fd = open(dir, O_RDONLY);
-
-        LOGI("Module directory fd: %d\n", dir_fd);
-
-        if (send_fd(client_fd, dir_fd) == -1) {
-          LOGE("Failed sending module directory fd\n");
-
-          close(dir_fd);
+        int fd = open(module_dir, O_RDONLY);
+        if (fd == -1) {
+          LOGE("Failed opening module directory \"%s\": %s\n", module_dir, strerror(errno));
 
           break;
         }
 
-        LOGI("Sent module directory fd\n");
+        struct stat st;
+        if (fstat(fd, &st) == -1) {
+          LOGE("Failed getting module directory \"%s\" stats: %s\n", module_dir, strerror(errno));
+
+          close(fd);
+
+          break;
+        }
+
+        if (gwrite_fd(client_fd, fd) == -1) {
+          LOGE("Failed sending module directory \"%s\" fd: %s\n", module_dir, strerror(errno));
+
+          close(fd);
+
+          break;
+        }
+
+        LOGI("ZD++ GetModuleDir\n");
 
         break;
       }
     }
-
-    close(client_fd);
 
     continue;
   }

@@ -14,9 +14,15 @@
   FILE *CONCAT(fpl, __LINE__) = fopen("/data/local/tmp/zygiskd.log", "a"); fprintf(CONCAT(fpl, __LINE__), __VA_ARGS__); fclose(CONCAT(fpl, __LINE__))
 
 #define LOGE(...)                                                                           \
-  __android_log_print(ANDROID_LOG_INFO , lp_select("zygiskd32", "zygiskd64"), __VA_ARGS__); \
+  __android_log_print(ANDROID_LOG_ERROR , lp_select("zygiskd32", "zygiskd64"), __VA_ARGS__); \
   printf(__VA_ARGS__);                                                                      \
   FILE *CONCAT(fpl, __LINE__) = fopen("/data/local/tmp/zygiskd.log", "a"); fprintf(CONCAT(fpl, __LINE__), __VA_ARGS__); fclose(CONCAT(fpl, __LINE__))
+
+#define write_func_def(type)               \
+  ssize_t write_## type(int fd, type val)
+
+#define read_func_def(type)               \
+  ssize_t read_## type(int fd, type *val)
 
 bool switch_mount_namespace(pid_t pid);
 
@@ -30,9 +36,25 @@ int chcon(const char *path, const char *restrict context);
 
 int unix_listener_from_path(char *path);
 
-ssize_t send_fd(int sockfd, int fd);
+// ssize_t send_fd(int sockfd, int fd);
 
-ssize_t recv_fd(int sockfd, int *restrict fd);
+// int recv_fd(int sockfd);
+
+ssize_t gwrite_fd(int fd, int sendfd);
+
+int gread_fd(int fd);
+
+write_func_def(int);
+read_func_def(int);
+
+write_func_def(size_t);
+read_func_def(size_t);
+
+write_func_def(uint32_t);
+read_func_def(uint32_t);
+
+write_func_def(uint8_t);
+read_func_def(uint8_t);
 
 ssize_t write_string(int fd, const char *restrict str);
 

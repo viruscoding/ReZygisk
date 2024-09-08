@@ -86,7 +86,7 @@ int main(int argc, char *argv[]) {
     return 1;
   }
   root_impls_setup();
-  zygiskd_start();
+  zygiskd_start(argv);
 
   return 0;
 }

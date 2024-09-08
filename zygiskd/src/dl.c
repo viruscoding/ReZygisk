@@ -1,29 +1,51 @@
+#include <stdio.h>
 #include <stdlib.h>
-
-#include <sys/types.h>
-#include <libgen.h>
+#include <string.h>
 #include <dlfcn.h>
+#include <errno.h>
+#include <libgen.h>
+#include <unistd.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <stdint.h>
+
+#include <android/log.h>
+
+#include "companion.h"
+#include "dl.h"
+#include "utils.h"
 
 #define ANDROID_NAMESPACE_TYPE_SHARED 0x2
 #define ANDROID_DLEXT_USE_NAMESPACE 0x200
 
-struct AndroidNamespace {
-  u_int8_t _unused[0];
-};
+typedef struct AndroidNamespace {
+  unsigned char _unused[0];
+} AndroidNamespace;
 
-struct AndroidDlextinfo {
-  u_int64_t flags;
+typedef struct AndroidDlextinfo {
+  uint64_t flags;
   void *reserved_addr;
   size_t reserved_size;
   int relro_fd;
   int library_fd;
   off64_t library_fd_offset;
-  struct AndroidNamespace *library_namespace;
-};
+  AndroidNamespace *library_namespace;
+} AndroidDlextinfo;
 
-void *android_dlopen_ext(const char *filename, int flags, const struct AndroidDlextinfo *extinfo);
+extern void *android_dlopen_ext(const char *filename, int flags, const AndroidDlextinfo *extinfo);
 
-void *android_dlopen(char *restrict path, uint32_t flags) {
+typedef AndroidNamespace *(*AndroidCreateNamespaceFn)(
+  const char *name,
+  const char *ld_library_path,
+  const char *default_library_path,
+  uint64_t type,
+  const char *permitted_when_isolated_path,
+  AndroidNamespace *parent,
+  const void *caller_addr
+);
+
+void *android_dlopen(char *path, int flags) {
   char *dir = dirname(path);
   struct AndroidDlextinfo info = {
     .flags = 0,
@@ -35,24 +57,32 @@ void *android_dlopen(char *restrict path, uint32_t flags) {
     .library_namespace = NULL,
   };
 
-  void *android_create_namespace_fn = dlsym(RTLD_DEFAULT, "__loader_android_create_namespace");
+  void *handle = dlsym(RTLD_DEFAULT, "__loader_android_create_namespace");
+  AndroidCreateNamespaceFn android_create_namespace_fn = (AndroidCreateNamespaceFn)handle;
 
-  if (android_create_namespace_fn != NULL) {
-    void *ns = ((void *(*)(const char *, const char *, const char *, u_int32_t, void *, void *, void *))android_create_namespace_fn)(
-      path,
-      dir,
-      NULL,
-      ANDROID_NAMESPACE_TYPE_SHARED,
-      NULL,
-      NULL,
-      (void *)&android_dlopen
-    );
+  AndroidNamespace *ns = android_create_namespace_fn(
+    path,
+    dir,
+    NULL,
+    ANDROID_NAMESPACE_TYPE_SHARED,
+    NULL,
+    NULL,
+    (const void *)&android_dlopen
+  );
 
-    if (ns != NULL) {
-      info.flags = ANDROID_DLEXT_USE_NAMESPACE;
-      info.library_namespace = ns;
-    }
+  if (ns != NULL) {
+    info.flags = ANDROID_DLEXT_USE_NAMESPACE;
+    info.library_namespace = ns;
+
+    LOGI("Open %s with namespace %p\n", path, (void *)ns);
+  } else {
+    LOGI("Cannot create namespace for %s\n", path);
   }
 
-  return android_dlopen_ext(path, flags, &info);
+  void *result = android_dlopen_ext(path, flags, &info);
+  if (result == NULL) {
+    LOGE("Failed to dlopen %s: %s\n", path, dlerror());
+  }
+
+  return result;
 }

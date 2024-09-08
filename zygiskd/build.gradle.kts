@@ -15,7 +15,7 @@ fun getLatestNDKPath(): String {
   }
 
   // get 2nd latest version
-  val ndkVersion = ndkDir.toFile().listFiles().filter { it.isDirectory }.map { it.name }.sorted().reversed().getOrNull(1)
+  val ndkVersion = ndkDir.toFile().listFiles().filter { it.isDirectory }.map { it.name }.sorted().reversed().getOrNull(2)
   return ndkPath + "/" + ndkVersion
 }
 
