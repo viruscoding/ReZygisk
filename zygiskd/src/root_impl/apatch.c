@@ -30,6 +30,8 @@ enum RootImplState apatch_get_existence(void) {
 
   int version = atoi(apatch_version + strlen("apd "));
 
+  LOGI("Meow-- Version: %d\n", version);
+
   if (version == 0) return Abnormal;
   if (version >= MIN_APATCH_VERSION && version <= 999999) return Supported;
   if (version >= 1 && version <= MIN_APATCH_VERSION - 1) return TooOld;
@@ -50,6 +52,9 @@ struct packages_config {
 
 /* WARNING: Dynamic memory based */
 bool _apatch_get_package_config(struct packages_config *restrict config) {
+  config->configs = NULL;
+  config->size = 0;
+
   FILE *fp = fopen("/data/adb/ap/package_config", "r");
   if (fp == NULL) {
     LOGE("Failed to open APatch's package_config: %s\n", strerror(errno));
@@ -57,16 +62,17 @@ bool _apatch_get_package_config(struct packages_config *restrict config) {
     return false;
   }
 
-  char line[1024 * 2];
+  char line[1048 * 2];
   /* INFO: Skip the CSV header */
-  fgets(line, sizeof(line), fp);
+  if (fgets(line, sizeof(line), fp) == NULL) {
+    LOGE("Failed to read APatch's package_config header: %s\n", strerror(errno));
 
-  LOGI("meow meow: %s\n", line);
+    fclose(fp);
 
-  config->size = 0;
-  while (fgets(line, sizeof(line), fp) != NULL) {
-    LOGI("meow meow\n");
- 
+    return false;
+  }
+
+  while (fgets(line, sizeof(line), fp) != NULL) { 
     config->configs = realloc(config->configs, (config->size + 1) * sizeof(struct package_config));
     if (config->configs == NULL) {
       LOGE("Failed to realloc APatch config struct: %s\n", strerror(errno));
@@ -76,26 +82,16 @@ bool _apatch_get_package_config(struct packages_config *restrict config) {
       return false;
     }
 
-    LOGI("meow meow (1): %s\n", line);
-
     strtok(line, ",");
-
-    LOGI("meow meow (2)\n");
 
     char *exclude_str = strtok(NULL, ",");
     if (exclude_str == NULL) continue;
 
-    LOGI("meow meow: %s\n", exclude_str);
-
     char *allow_str = strtok(NULL, ",");
     if (allow_str == NULL) continue;
 
-    LOGI("meow meow: %s\n", allow_str);
-
     char *uid_str = strtok(NULL, ",");
     if (uid_str == NULL) continue;
-
-    LOGI("meow meow: %s\n", uid_str);
 
     config->configs[config->size].uid = atoi(uid_str);
     config->configs[config->size].root_granted = strcmp(allow_str, "1") == 0;
@@ -109,44 +105,46 @@ bool _apatch_get_package_config(struct packages_config *restrict config) {
   return true;
 }
 
+void _apatch_free_package_config(struct packages_config *restrict config) {
+  free(config->configs);
+}
+
 bool apatch_uid_granted_root(uid_t uid) {
-  struct packages_config *config = NULL;
-  if (!_apatch_get_package_config(config)) {
-    free(config);
+  struct packages_config config;
+  if (!_apatch_get_package_config(&config)) {
+    _apatch_free_package_config(&config);
 
     return false;
   }
 
-  for (size_t i = 0; i < config->size; i++) {
-    if (config->configs[i].uid == uid) {
-      free(config);
+  for (size_t i = 0; i < config.size; i++) {
+    if (config.configs[i].uid == uid) {
+      _apatch_free_package_config(&config);
 
-      return config->configs[i].root_granted;
+      return config.configs[i].root_granted;
     }
   }
-
-  free(config);
 
   return false;
 }
 
 bool apatch_uid_should_umount(uid_t uid) {
-  struct packages_config *config = NULL;
-  if (!_apatch_get_package_config(config)) {
-    free(config);
+  struct packages_config config;
+  if (!_apatch_get_package_config(&config)) {
+    _apatch_free_package_config(&config);
 
     return false;
   }
 
-  for (size_t i = 0; i < config->size; i++) {
-    if (config->configs[i].uid == uid) {
-      free(config);
+  for (size_t i = 0; i < config.size; i++) {
+    if (config.configs[i].uid == uid) {
+      _apatch_free_package_config(&config);
 
-      return config->configs[i].umount_needed;
+      return config.configs[i].umount_needed;
     }
   }
 
-  free(config);
+  _apatch_free_package_config(&config);
 
   return false;
 }
