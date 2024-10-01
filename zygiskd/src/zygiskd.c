@@ -361,7 +361,7 @@ struct __attribute__((__packed__)) MsgHead {
 };
 
 void zygiskd_start(char *restrict argv[]) {
-  LOGI("Welcome to ReZygisk %s!\n", ZKSU_VERSION);
+  LOGI("Welcome to ReZygisk %s Zygiskd!\n", ZKSU_VERSION);
 
   enum RootImpl impl = get_impl();
   if (impl == None) {
@@ -574,6 +574,8 @@ void zygiskd_start(char *restrict argv[]) {
         if (ret == -1) {
           LOGE("Failed reading logcat tag.\n");
 
+          close(client_fd);
+
           break;
         }
 
@@ -584,6 +586,8 @@ void zygiskd_start(char *restrict argv[]) {
         ret = read_string(client_fd, message, sizeof(message));
         if (ret == -1) {
           LOGE("Failed reading logcat message.\n");
+
+          close(client_fd);
 
           break;
         }
@@ -735,10 +739,17 @@ void zygiskd_start(char *restrict argv[]) {
 
             ret = write_int(client_fd, 0);
             ASSURE_SIZE_WRITE_BREAK("RequestCompanionSocket", "response", ret, sizeof(int));
+
+            close(module->companion);
+            module->companion = -1;
+
+            close(client_fd);
           }
         } else {
           ret = write_int(client_fd, 0);
           ASSURE_SIZE_WRITE_BREAK("RequestCompanionSocket", "response", ret, sizeof(int));
+
+          close(client_fd);
         }
 
         LOGI("ZD++ RequestCompanionSocket\n");
@@ -784,7 +795,7 @@ void zygiskd_start(char *restrict argv[]) {
       }
     }
 
-    if (action != RequestCompanionSocket) close(client_fd);
+    if (action != RequestCompanionSocket && action != RequestLogcatFd) close(client_fd);
 
     continue;
   }
