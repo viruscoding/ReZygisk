@@ -42,28 +42,16 @@ void *entry_thread(void *arg) {
   int fd = args->fd;
   zygisk_companion_entry_func module_entry = args->entry;
 
-  struct stat st0;
-  fstat(fd, &st0);
-
   LOGI("New companion thread (inside the thread!).\n - Client fd: %d\n", fd);
 
   module_entry(fd);
 
-  /* TODO: Is this even necessary? */
-  struct stat st1;
-  if (fstat(fd, &st1) != -1) {
-    if (st0.st_dev != st1.st_dev || st0.st_ino != st1.st_ino) {
-      close(fd);
+  LOGI("Companion thread has been terminated.\n");
 
-      LOGI("Client fd has been replaced. Bye!\n");
-    }
-  }
-
+  close(fd);
   free(args);
 
   pthread_exit(NULL);
-
-  return NULL;
 }
 
 void entry(int fd) {
@@ -74,20 +62,18 @@ void entry(int fd) {
   if (ret == -1) {
     LOGE("Failed to read module name\n");
 
-    uint8_t response = 2;
-    write(fd, &response, sizeof(response));
+    write_uint8_t(fd, 2);
 
     exit(0);
   }
 
   LOGI(" - Module name: `%.*s`\n", (int)ret, name);
 
-  int library_fd = gread_fd(fd);
+  int library_fd = read_fd(fd);
   if (library_fd == -1) {
     LOGE("Failed to receive library fd\n");
 
-    uint8_t response = 2;
-    write(fd, &response, sizeof(response));
+    write_uint8_t(fd, 2);
 
     exit(0);
   }
@@ -100,11 +86,11 @@ void entry(int fd) {
   if (module_entry == NULL) {
     LOGI("No companion module entry for module: %.*s\n", (int)ret, name);
 
-    write_int(fd, 0);
+    write_uint8_t(fd, 0);
 
     exit(0);
   } else {
-    write_int(fd, 1);
+    write_uint8_t(fd, 1);
   }
 
   while (1) {
@@ -119,7 +105,7 @@ void entry(int fd) {
     struct companion_module_thread_args *args = malloc(sizeof(struct companion_module_thread_args));
     args->entry = module_entry;
   
-    if ((args->fd = gread_fd(fd)) == -1) {
+    if ((args->fd = read_fd(fd)) == -1) {
       LOGE("Failed to receive client fd\n");
 
       exit(0);

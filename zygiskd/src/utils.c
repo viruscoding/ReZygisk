@@ -192,7 +192,7 @@ int unix_listener_from_path(char *restrict path) {
   return socket_fd;
 }
 
-ssize_t gwrite_fd(int fd, int sendfd) {
+ssize_t write_fd(int fd, int sendfd) {
   char cmsgbuf[CMSG_SPACE(sizeof(int))];
   char buf[1] = { 0 };
   
@@ -225,7 +225,7 @@ ssize_t gwrite_fd(int fd, int sendfd) {
   return ret;
 }
 
-int gread_fd(int fd) {
+int read_fd(int fd) {
   char cmsgbuf[CMSG_SPACE(sizeof(int))];
   char buf[1] = { 0 };
   

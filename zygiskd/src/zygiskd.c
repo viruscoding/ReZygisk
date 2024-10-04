@@ -278,7 +278,7 @@ static int spawn_companion(char *restrict argv[], char *restrict name, int lib_f
 
         return -1;
       }
-      if (gwrite_fd(daemon_fd, lib_fd) == -1) {
+      if (write_fd(daemon_fd, lib_fd) == -1) {
         LOGE("Failed sending library fd.\n");
 
         close(daemon_fd);
@@ -694,7 +694,7 @@ void zygiskd_start(char *restrict argv[]) {
 
         for (size_t i = 0; i < clen; i++) {
           if (write_string(client_fd, context.modules[i].name) == -1) break;
-          if (gwrite_fd(client_fd, context.modules[i].lib_fd) == -1) break;
+          if (write_fd(client_fd, context.modules[i].lib_fd) == -1) break;
         }
 
         LOGI("ZD++ ReadModules\n");
@@ -711,6 +711,8 @@ void zygiskd_start(char *restrict argv[]) {
         struct Module *module = &context.modules[index];
 
         if (module->companion != -1) {
+          LOGI("  Polling companion for module \"%s\"\n", module->name);
+
           if (!check_unix_socket(module->companion, false)) {
             LOGE("  Poll companion for module \"%s\" crashed\n", module->name);
 
@@ -733,22 +735,32 @@ void zygiskd_start(char *restrict argv[]) {
           }
         }
 
+        /* 
+          INFO: Companion already exists or was created. In any way,
+                 it should be in the while loop to receive fds now,
+                 so just sending the file descriptor of the client is
+                 safe.
+        */
         if (module->companion != -1) {
-          if (gwrite_fd(module->companion, client_fd) == -1) {
+          LOGI("  Sending companion fd socket of module \"%s\"\n", module->name);
+
+          if (write_fd(module->companion, client_fd) == -1) {
             LOGE("Failed to send companion fd socket of module \"%s\"\n", module->name);
 
-            ret = write_int(client_fd, 0);
+            ret = write_uint8_t(client_fd, 0);
             ASSURE_SIZE_WRITE_BREAK("RequestCompanionSocket", "response", ret, sizeof(int));
 
             close(module->companion);
             module->companion = -1;
 
+            /* INFO: RequestCompanionSocket by defailt doesn't close the client_fd */
             close(client_fd);
           }
         } else {
-          ret = write_int(client_fd, 0);
+          ret = write_uint8_t(client_fd, 0);
           ASSURE_SIZE_WRITE_BREAK("RequestCompanionSocket", "response", ret, sizeof(int));
 
+          /* INFO: RequestCompanionSocket by defailt doesn't close the client_fd */
           close(client_fd);
         }
 
@@ -781,7 +793,7 @@ void zygiskd_start(char *restrict argv[]) {
           break;
         }
 
-        if (gwrite_fd(client_fd, fd) == -1) {
+        if (write_fd(client_fd, fd) == -1) {
           LOGE("Failed sending module directory \"%s\" fd: %s\n", module_dir, strerror(errno));
 
           close(fd);

@@ -36,9 +36,8 @@ int chcon(const char *path, const char *restrict context);
 
 int unix_listener_from_path(char *path);
 
-ssize_t gwrite_fd(int fd, int sendfd);
-
-int gread_fd(int fd);
+ssize_t write_fd(int fd, int sendfd);
+int read_fd(int fd);
 
 write_func_def(int);
 read_func_def(int);
