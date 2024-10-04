@@ -2,7 +2,6 @@
 
 #include <sys/system_properties.h>
 #include <unistd.h>
-#include <map>
 #include <set>
 #include <sys/signalfd.h>
 #include <err.h>
@@ -165,13 +164,10 @@ struct SocketHandler : public EventHandler {
     };
 
     while (1) {
-      std::vector<uint8_t> buf;
-      buf.resize(sizeof(MsgHead), 0);
-
-      MsgHead &msg = *((MsgHead *)buf.data());
+      struct MsgHead *msg = (struct MsgHead *)malloc(sizeof(struct MsgHead));
 
       ssize_t real_size;
-      ssize_t nread = recv(sock_fd_, &msg, sizeof(msg), MSG_PEEK);
+      ssize_t nread = recv(sock_fd_, msg, sizeof(struct MsgHead), MSG_PEEK);
       if (nread == -1) {
         if (errno == EAGAIN) break;
 
@@ -183,17 +179,17 @@ struct SocketHandler : public EventHandler {
         continue;
       }
 
-      if (msg.cmd >= Command::DAEMON64_SET_INFO && msg.cmd != Command::SYSTEM_SERVER_STARTED) {
+      if (msg->cmd >= Command::DAEMON64_SET_INFO && msg->cmd != Command::SYSTEM_SERVER_STARTED) {
         if (nread != sizeof(msg)) {
-          LOGE("cmd %d size %zu != %zu", msg.cmd, nread, sizeof(MsgHead));
+          LOGE("cmd %d size %zu != %zu", msg->cmd, nread, sizeof(MsgHead));
 
           continue;
         }
 
-        real_size = sizeof(MsgHead) + msg.length;
+        real_size = sizeof(MsgHead) + msg->length;
       } else {
         if (nread != sizeof(Command)) {
-          LOGE("cmd %d size %zu != %zu", msg.cmd, nread, sizeof(Command));
+          LOGE("cmd %d size %zu != %zu", msg->cmd, nread, sizeof(Command));
 
           continue;
         }
@@ -201,8 +197,8 @@ struct SocketHandler : public EventHandler {
         real_size = sizeof(Command);
       }
 
-      buf.resize(real_size);
-      nread = recv(sock_fd_, &msg, real_size, 0);
+      msg = (struct MsgHead *)realloc(msg, real_size);
+      nread = recv(sock_fd_, msg, real_size, 0);
 
       if (nread == -1) {
         if (errno == EAGAIN) break;
@@ -217,7 +213,7 @@ struct SocketHandler : public EventHandler {
         continue;
       }
 
-      switch (msg.cmd) {
+      switch (msg->cmd) {
         case START: {
           if (tracing_state == STOPPING) tracing_state = TRACING;
           else if (tracing_state == STOPPED) {
@@ -271,7 +267,7 @@ struct SocketHandler : public EventHandler {
           break;
         }
         case DAEMON64_SET_INFO: {
-          LOGD("received daemon64 info %s", msg.data);
+          LOGD("received daemon64 info %s", msg->data);
 
           /* Will only happen if somehow the daemon restarts */
           if (status64.daemon_info != NULL) {
@@ -279,32 +275,42 @@ struct SocketHandler : public EventHandler {
             status64.daemon_info = NULL;
           }
 
-          status64.daemon_info = (char *)malloc(msg.length);
-          memcpy(status64.daemon_info, msg.data, msg.length - 1);
-          status64.daemon_info[msg.length - 1] = '\0';
+          status64.daemon_info = (char *)malloc(msg->length);
+          if (status64.daemon_info == NULL) {
+            PLOGE("malloc daemon64 info");
+
+            break;
+          }
+
+          strcpy(status64.daemon_info, msg->data);
 
           updateStatus();
 
           break;
         }
         case DAEMON32_SET_INFO: {
-          LOGD("received daemon32 info %s", msg.data);
+          LOGD("received daemon32 info %s", msg->data);
 
           if (status32.daemon_info != NULL) {
             free(status32.daemon_info);
             status32.daemon_info = NULL;
           }
 
-          status32.daemon_info = (char *)malloc(msg.length);
-          memcpy(status32.daemon_info, msg.data, msg.length - 1);
-          status32.daemon_info[msg.length - 1] = '\0';
+          status32.daemon_info = (char *)malloc(msg->length);
+          if (status32.daemon_info == NULL) {
+            PLOGE("malloc daemon32 info");
+
+            break;
+          }
+
+          strcpy(status32.daemon_info, msg->data);
 
           updateStatus();
 
           break;
         }
         case DAEMON64_SET_ERROR_INFO: {
-          LOGD("received daemon64 error info %s", msg.data);
+          LOGD("received daemon64 error info %s", msg->data);
 
           status64.daemon_running = false;
 
@@ -313,16 +319,21 @@ struct SocketHandler : public EventHandler {
             status64.daemon_error_info = NULL;
           }
 
-          status64.daemon_error_info = (char *)malloc(msg.length);
-          memcpy(status64.daemon_error_info, msg.data, msg.length - 1);
-          status64.daemon_error_info[msg.length - 1] = '\0';
+          status64.daemon_error_info = (char *)malloc(msg->length);
+          if (status64.daemon_error_info == NULL) {
+            PLOGE("malloc daemon64 error info");
+
+            break;
+          }
+
+          strcpy(status64.daemon_error_info, msg->data);
 
           updateStatus();
 
           break;
         }
         case DAEMON32_SET_ERROR_INFO: {
-          LOGD("received daemon32 error info %s", msg.data);
+          LOGD("received daemon32 error info %s", msg->data);
 
           status32.daemon_running = false;
 
@@ -331,9 +342,14 @@ struct SocketHandler : public EventHandler {
             status32.daemon_error_info = NULL;
           }
           
-          status32.daemon_error_info = (char *)malloc(msg.length);
-          memcpy(status32.daemon_error_info, msg.data, msg.length - 1);
-          status32.daemon_error_info[msg.length - 1] = '\0';
+          status32.daemon_error_info = (char *)malloc(msg->length);
+          if (status32.daemon_error_info == NULL) {
+            PLOGE("malloc daemon32 error info");
+
+            break;
+          }
+
+          strcpy(status32.daemon_error_info, msg->data);
 
           updateStatus();
 
@@ -349,6 +365,8 @@ struct SocketHandler : public EventHandler {
           break;
         }
       }
+
+      free(msg);
     }
   }
 
