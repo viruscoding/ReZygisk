@@ -14,8 +14,7 @@ fun getLatestNDKPath(): String {
     throw Exception("NDK not found at $ndkPath")
   }
 
-  // get 2nd latest version
-  val ndkVersion = ndkDir.toFile().listFiles().filter { it.isDirectory }.map { it.name }.sorted().reversed().getOrNull(2)
+  val ndkVersion = ndkDir.toFile().listFiles().filter { it.isDirectory }.map { it.name }.sorted().last()
   return ndkPath + "/" + ndkVersion
 }
 
