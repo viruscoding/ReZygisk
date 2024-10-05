@@ -28,18 +28,16 @@ val ccachePath by lazy {
 val defaultCFlags = arrayOf(
     "-Wall", "-Wextra",
     "-fno-rtti", "-fno-exceptions",
-    "-fvisibility=hidden", "-fvisibility-inlines-hidden",
     "-fno-stack-protector", "-fomit-frame-pointer",
-    "-Wno-builtin-macro-redefined", "-D__FILE__=__FILE_NAME__",
-    "-O0", "-g"
+    "-Wno-builtin-macro-redefined", "-D__FILE__=__FILE_NAME__"
 )
 
 val releaseFlags = arrayOf(
+    "-Ofast", "-flto=thin",
     "-Wno-unused", "-Wno-unused-parameter",
     "-fvisibility=hidden", "-fvisibility-inlines-hidden",
     "-fno-unwind-tables", "-fno-asynchronous-unwind-tables",
-    "-Wl,--exclude-libs,ALL", "-Wl,--gc-sections",
-    "-Wl,--strip-all", "-Ofast", "-flto=thin",
+    "-Wl,--exclude-libs,ALL", "-Wl,--gc-sections", "-Wl,--strip-all"
 )
 
 android {
