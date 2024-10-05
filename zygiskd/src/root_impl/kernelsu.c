@@ -13,7 +13,7 @@
            so we need to cast it to signed int to
            avoid any potential UB.
 */
-#define KERNEL_SU_OPTION (signed int)0xdeadbeef
+#define KERNEL_SU_OPTION 0xdeadbeef
 
 #define CMD_GET_VERSION 2
 #define CMD_UID_GRANTED_ROOT 12
@@ -21,7 +21,7 @@
 
 enum RootImplState ksu_get_existence(void) {
   int version = 0;
-  prctl(KERNEL_SU_OPTION, CMD_GET_VERSION, &version, 0, 0);
+  prctl((signed int)KERNEL_SU_OPTION, CMD_GET_VERSION, &version, 0, 0);
 
   if (version == 0) return Inexistent;
   if (version >= MIN_KSU_VERSION && version <= MAX_KSU_VERSION) return Supported;

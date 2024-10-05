@@ -27,6 +27,9 @@ val verName: String by rootProject.extra
 val commitHash: String by rootProject.extra
 
 val CStandardFlags = arrayOf(
+  "-D_GNU_SOURCE", "-std=c99", "-Wpedantic", "-Wall", "-Wextra", "-Werror",
+  "-Wformat", "-Wuninitialized", "-Wshadow", "-Wno-zero-length-array", 
+  "-Wno-fixed-enum-extension", "-Iroot_impl", "-llog",
   "-DMIN_APATCH_VERSION=$minAPatchVersion",
   "-DMIN_KSU_VERSION=$minKsuVersion",
   "-DMAX_KSU_VERSION=$maxKsuVersion",
@@ -35,16 +38,10 @@ val CStandardFlags = arrayOf(
 )
 
 val CFlagsRelease = arrayOf(
-  "-D_GNU_SOURCE", "-std=c99", "-Wpedantic", "-Wall", "-Wextra", "-Werror",
-  "-Wformat", "-Wuninitialized", "-Wshadow", "-Wno-zero-length-array", 
-  "-Wno-fixed-enum-extension", "-Iroot_impl", "-llog",
   "-Wl,--strip-all", "-flto=thin", "-Ofast"
 )
 
 val CFlagsDebug = arrayOf(
-  "-D_GNU_SOURCE", "-std=c99", "-Wpedantic", "-Wall", "-Wextra", "-Werror",
-  "-Wformat", "-Wuninitialized", "-Wshadow", "-Wno-zero-length-array", 
-  "-Wno-fixed-enum-extension", "-Iroot_impl", "-llog",
   "-g", "-O0"
 )
 
