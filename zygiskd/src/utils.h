@@ -10,13 +10,11 @@
 
 #define LOGI(...)                                                                           \
   __android_log_print(ANDROID_LOG_INFO, lp_select("zygiskd32", "zygiskd64"), __VA_ARGS__);  \
-  printf(__VA_ARGS__);                                                                      \
-  FILE *CONCAT(fpl, __LINE__) = fopen("/data/local/tmp/zygiskd.log", "a"); fprintf(CONCAT(fpl, __LINE__), __VA_ARGS__); fclose(CONCAT(fpl, __LINE__))
+  printf(__VA_ARGS__);
 
-#define LOGE(...)                                                                           \
+#define LOGE(...)                                                                            \
   __android_log_print(ANDROID_LOG_ERROR , lp_select("zygiskd32", "zygiskd64"), __VA_ARGS__); \
-  printf(__VA_ARGS__);                                                                      \
-  FILE *CONCAT(fpl, __LINE__) = fopen("/data/local/tmp/zygiskd.log", "a"); fprintf(CONCAT(fpl, __LINE__), __VA_ARGS__); fclose(CONCAT(fpl, __LINE__))
+  printf(__VA_ARGS__);
 
 #define write_func_def(type)               \
   ssize_t write_## type(int fd, type val)
