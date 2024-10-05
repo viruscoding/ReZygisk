@@ -360,6 +360,7 @@ struct __attribute__((__packed__)) MsgHead {
   char data[0];
 };
 
+/* WARNING: Dynamic memory based */
 void zygiskd_start(char *restrict argv[]) {
   LOGI("Welcome to ReZygisk %s Zygiskd!\n", ZKSU_VERSION);
 

@@ -54,6 +54,7 @@ void *entry_thread(void *arg) {
   pthread_exit(NULL);
 }
 
+/* WARNING: Dynamic memory based */
 void entry(int fd) {
   LOGI("New companion entry.\n - Client fd: %d\n", fd);
 

@@ -9,7 +9,11 @@
 
 #include "kernelsu.h"
 
-#define KERNEL_SU_OPTION 0xdeadbeef
+/* INFO: It would be presumed it is a unsigned int,
+           so we need to cast it to signed int to
+           avoid any potential UB.
+*/
+#define KERNEL_SU_OPTION (signed int)0xdeadbeef
 
 #define CMD_GET_VERSION 2
 #define CMD_UID_GRANTED_ROOT 12
