@@ -849,7 +849,6 @@ static bool prepare_environment() {
 
 void init_monitor() {
   LOGI("ReZygisk %s", ZKSU_VERSION);
-  LOGI("init monitor started");
 
   if (!prepare_environment()) exit(1);
 
