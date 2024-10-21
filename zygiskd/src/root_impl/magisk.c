@@ -33,24 +33,18 @@ static char path_to_magisk[sizeof(DEBUG_RAMDISK_MAGISK)];
 enum RootImplState magisk_get_existence(void) {
   struct stat s;
   if (stat(SBIN_MAGISK, &s) != 0) {
-    LOGE("Failed to stat Magisk /sbin/magisk binary: %s\n", strerror(errno));
-  
     if (errno != ENOENT) {
       LOGE("Failed to stat Magisk /sbin/magisk binary: %s\n", strerror(errno));
     }
     errno = 0;
 
     if (stat(DEBUG_RAMDISK_MAGISK, &s) != 0) {
-      LOGE("Failed to stat Magisk %s binary: %s\n", DEBUG_RAMDISK_MAGISK, strerror(errno));
-    
       if (errno != ENOENT) {
         LOGE("Failed to stat Magisk %s binary: %s\n", DEBUG_RAMDISK_MAGISK, strerror(errno));
       }
       errno = 0;
 
       if (stat(BITLESS_DEBUG_RAMDISK_MAGISK, &s) != 0) {
-        LOGE("Failed to stat Magisk %s binary: %s\n", BITLESS_DEBUG_RAMDISK_MAGISK, strerror(errno));
-    
         if (errno != ENOENT) {
           LOGE("Failed to stat Magisk /debug_ramdisk/magisk binary: %s\n", strerror(errno));
         }
@@ -116,76 +110,41 @@ bool magisk_uid_granted_root(uid_t uid) {
 }
 
 bool magisk_uid_should_umount(uid_t uid) {
-  struct dirent *entry;
-  DIR *proc = opendir("/proc");
-  if (!proc) {
-    LOGE("Failed to open /proc: %s\n", strerror(errno));
+  char uid_str[16];
+  snprintf(uid_str, sizeof(uid_str), "%d", uid);
+
+  char *const argv_pm[] = { "pm", "list", "packages", "--uid", uid_str, NULL };
+
+  char result[256];
+  if (!exec_command(result, sizeof(result), "/system/bin/pm", argv_pm)) {
+    LOGE("Failed to execute pm binary: %s\n", strerror(errno));
+    errno = 0;
+
+    return false; /* INFO: It's better if we do NOT umount than the opposite */
+  }
+
+  if (result[0] == '\0') {
+    LOGE("Failed to get package name from UID %d\n", uid);
+
+    return false;
+  }
+
+  char *package_name = strtok(result + strlen("package:"), " ");
+
+  char sqlite_cmd[256];
+  snprintf(sqlite_cmd, sizeof(sqlite_cmd), "select 1 from denylist where package_name=\"%s\" limit 1", package_name);
+
+  char *const argv[] = { "magisk", "--sqlite", sqlite_cmd, NULL };
+
+  result[0] = '\0';
+  if (!exec_command(result, sizeof(result), (const char *)path_to_magisk, argv)) {
+    LOGE("Failed to execute magisk binary: %s\n", strerror(errno));
     errno = 0;
 
     return false;
   }
 
-  while ((entry = readdir(proc))) {
-    if (entry->d_type != DT_DIR) continue;
-
-    if (atoi(entry->d_name) == 0) continue;
-
-    char stat_path[32];
-    snprintf(stat_path, sizeof(stat_path), "/proc/%s/stat", entry->d_name);
-
-    struct stat s;
-    if (stat(stat_path, &s) == -1) continue;
-
-    if (s.st_uid != uid) continue;
-
-    char package_name[255 + 1];
-
-    char cmdline_path[32];
-    snprintf(cmdline_path, sizeof(cmdline_path), "/proc/%s/cmdline", entry->d_name);
-
-    int cmdline = open(cmdline_path, O_RDONLY);
-    if (cmdline == -1) {
-      LOGE("Failed to open %s: %s\n", cmdline_path, strerror(errno));
-      errno = 0;
-
-      closedir(proc);
-
-      continue;
-    }
-
-    ssize_t read_bytes = read(cmdline, package_name, sizeof(package_name) - 1);
-    if (read_bytes == -1) {
-      LOGE("Failed to read from %s: %s\n", cmdline_path, strerror(errno));
-      errno = 0;
-
-      close(cmdline);
-      closedir(proc);
-
-      continue;
-    }
-
-    close(cmdline);
-    closedir(proc);
-
-    package_name[read_bytes] = '\0';
-
-    char sqlite_cmd[256];
-    snprintf(sqlite_cmd, sizeof(sqlite_cmd), "select 1 from denylist where package_name=\"%s\" limit 1", package_name);
-
-    char *const argv[] = { "magisk", "--sqlite", sqlite_cmd, NULL };
-
-    char result[32];
-    if (!exec_command(result, sizeof(result), (const char *)path_to_magisk, argv)) {
-      LOGE("Failed to execute magisk binary: %s\n", strerror(errno));
-      errno = 0;
-
-      return false;
-    }
-
-    return result[0] != '\0';
-  }
-
-  return false;
+  return result[0] != '\0';
 }
 
 bool magisk_uid_is_manager(uid_t uid) {
