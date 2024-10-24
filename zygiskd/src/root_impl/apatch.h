@@ -3,7 +3,7 @@
 
 #include "../constants.h"
 
-enum RootImplState apatch_get_existence(void);
+void apatch_get_existence(struct root_impl_state *state);
 
 bool apatch_uid_granted_root(uid_t uid);
 

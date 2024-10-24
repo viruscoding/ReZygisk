@@ -6,10 +6,11 @@
 
 #include "../constants.h"
 #include "../utils.h"
+#include "common.h"
 
 #include "apatch.h"
 
-enum RootImplState apatch_get_existence(void) {
+void apatch_get_existence(struct root_impl_state *state) {
   struct stat s;
   if (stat("/data/adb/apd", &s) != 0) {
     if (errno != ENOENT) {
@@ -17,7 +18,9 @@ enum RootImplState apatch_get_existence(void) {
     }
     errno = 0;
 
-    return Inexistent;
+    state->state = Inexistent;
+
+    return;
   }
 
   char *PATH = getenv("PATH");
@@ -25,13 +28,17 @@ enum RootImplState apatch_get_existence(void) {
     LOGE("Failed to get PATH environment variable: %s\n", strerror(errno));
     errno = 0;
 
-    return Inexistent;
+    state->state = Inexistent;
+
+    return;
   }
 
   if (strstr(PATH, "/data/adb/ap/bin") == NULL) {
     LOGE("APatch's APD binary is not in PATH\n");
 
-    return Inexistent;
+    state->state = Inexistent;
+
+    return;
   }
 
   char apatch_version[32];
@@ -41,16 +48,17 @@ enum RootImplState apatch_get_existence(void) {
     LOGE("Failed to execute apd binary: %s\n", strerror(errno));
     errno = 0;
 
-    return Inexistent;
+    state->state = Inexistent;
+
+    return;
   }
 
   int version = atoi(apatch_version + strlen("apd "));
 
-  if (version == 0) return Abnormal;
-  if (version >= MIN_APATCH_VERSION && version <= 999999) return Supported;
-  if (version >= 1 && version <= MIN_APATCH_VERSION - 1) return TooOld;
-
-  return Inexistent;
+  if (version == 0) state->state = Abnormal;
+  else if (version >= MIN_APATCH_VERSION && version <= 999999) state->state = Supported;
+  else if (version >= 1 && version <= MIN_APATCH_VERSION - 1) state->state = TooOld;
+  else state->state = Abnormal;
 }
 
 struct package_config {

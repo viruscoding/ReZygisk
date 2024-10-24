@@ -4,6 +4,7 @@
 #include <sys/types.h>
 
 #include "constants.h"
+#include "root_impl/common.h"
 
 #define CONCAT_(x,y) x##y
 #define CONCAT(x,y) CONCAT_(x,y)
@@ -100,5 +101,7 @@ bool exec_command(char *restrict buf, size_t len, const char *restrict file, cha
 bool check_unix_socket(int fd, bool block);
 
 int non_blocking_execv(const char *restrict file, char *const argv[]);
+
+void stringify_root_impl_name(struct root_impl impl, char *restrict output);
 
 #endif /* UTILS_H */

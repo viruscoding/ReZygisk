@@ -316,174 +316,91 @@ struct __attribute__((__packed__)) MsgHead {
 
 /* WARNING: Dynamic memory based */
 void zygiskd_start(char *restrict argv[]) {
-  LOGI("Welcome to ReZygisk %s Zygiskd!\n", ZKSU_VERSION);
+  /* INFO: When implementation is None or Multiple, it won't set the values 
+            for the context, causing it to have garbage values. In response
+            to that, "= { 0 }" is used to ensure that the values are clean. */
+  struct Context context = { 0 };
 
-  enum RootImpl impl = get_impl();
-  if (impl == None) {
-    struct MsgHead *msg = malloc(sizeof(struct MsgHead) + sizeof("No root implementation found."));
-    if (msg == NULL) {
-      LOGE("Failed allocating memory for message.\n");
-
-      return;
-    }
-
-    msg->cmd = DAEMON_SET_ERROR_INFO;
-    msg->length = sizeof("No root implementation found.");
-    memcpy(msg->data, "No root implementation found.", msg->length);
-
-    unix_datagram_sendto(CONTROLLER_SOCKET, &msg, sizeof(struct MsgHead) + msg->length);
-
-    free(msg);
-  } else if (impl == Multiple) {
-    struct MsgHead *msg = malloc(sizeof(struct MsgHead) + sizeof("Multiple root implementations found. Not supported yet."));
-    if (msg == NULL) {
-      LOGE("Failed allocating memory for message.\n");
-
-      return;
-    }
+  struct root_impl impl;
+  get_impl(&impl);
+  if (impl.impl == None || impl.impl == Multiple) {
+    struct MsgHead *msg = NULL;
   
-    msg->cmd = DAEMON_SET_ERROR_INFO;
-    msg->length = sizeof("Multiple root implementations found. Not supported yet.");
-    memcpy(msg->data, "Multiple root implementations found. Not supported yet.", msg->length);
+    if (impl.impl == None) {
+      msg = malloc(sizeof(struct MsgHead) + strlen("Unsupported environment: Unknown root implementation") + 1);
+    } else {
+      msg = malloc(sizeof(struct MsgHead) + strlen("Unsupported environment: Multiple root implementations found") + 1);
+    }
+    if (msg == NULL) {
+      LOGE("Failed allocating memory for message.\n");
 
-    unix_datagram_sendto(CONTROLLER_SOCKET, &msg, sizeof(struct MsgHead) + msg->length);
+      return;
+    }
+
+    msg->cmd = DAEMON_SET_ERROR_INFO;
+    if (impl.impl == None) {
+      msg->length = sprintf(msg->data, "Unsupported environment: Unknown root implementation");
+    } else {
+      msg->length = sprintf(msg->data, "Unsupported environment: Multiple root implementations found");
+    }
+
+    unix_datagram_sendto(CONTROLLER_SOCKET, (void *)msg, sizeof(struct MsgHead) + msg->length);
 
     free(msg);
-  }
+  } else {
+    enum Architecture arch = get_arch();
+    load_modules(arch, &context);
 
-  enum Architecture arch = get_arch();
+    char *module_list = NULL;
+    size_t module_list_len = 0;
+    if (context.len == 0) {
+      module_list = strdup("None");
+      module_list_len = strlen("None");
+    } else {
+      for (int i = 0; i < context.len; i++) {
+        if (i != context.len - 1) {
+          module_list = realloc(module_list, module_list_len + strlen(context.modules[i].name) + strlen(", ") + 1);
+          if (module_list == NULL) {
+            LOGE("Failed reallocating memory for module list.\n");
 
-  struct Context context;
-  load_modules(arch, &context);
+            return;
+          }
 
-  struct MsgHead *msg = NULL;
+          strcpy(module_list + module_list_len, context.modules[i].name);
 
-  switch (impl) {
-    case None: { break; }
-    case Multiple: { break; }
-    case KernelSU:
-    case APatch:
-    case Magisk: {
-      size_t root_impl_len = 0;
-      switch (impl) {
-        case None: { break; }
-        case Multiple: { break; }
-        case KernelSU: {
-          root_impl_len = strlen("KernelSU");
+          module_list_len += strlen(context.modules[i].name);
 
-          break;
-        }
-        case APatch: {
-          root_impl_len = strlen("APatch");
+          strcpy(module_list + module_list_len, ", ");
 
-          break;
-        }
-        case Magisk: {
-          root_impl_len = strlen("Magisk");
+          module_list_len += strlen(", ");
+        } else {
+          module_list = realloc(module_list, module_list_len + strlen(context.modules[i].name) + 1);
+          if (module_list == NULL) {
+            LOGE("Failed reallocating memory for module list.\n");
 
-          break;
+            return;
+          }
+
+          strcpy(module_list + module_list_len, context.modules[i].name);
+
+          module_list_len += strlen(context.modules[i].name);
         }
       }
-
-      if (context.len == 0) {
-        msg = malloc(sizeof(struct MsgHead) + strlen("Root: , Modules: None") + root_impl_len + 1);
-        if (msg == NULL) {
-          LOGE("Failed allocating memory for message.\n");
-
-          return;
-        }
-
-        msg->cmd = DAEMON_SET_INFO;
-        msg->length = strlen("Root: , Modules: None") + root_impl_len + 1;
-
-        switch (impl) {
-          case None: { break; }
-          case Multiple: { break; }
-          case KernelSU: {
-            memcpy(msg->data, "Root: KernelSU, Modules: None", strlen("Root: KernelSU, Modules: None"));
-
-            break;
-          }
-          case APatch: {
-            memcpy(msg->data, "Root: APatch, Modules: None", strlen("Root: APatch, Modules: None"));
-
-            break;
-          }
-          case Magisk: {
-            memcpy(msg->data, "Root: Magisk, Modules: None", strlen("Root: Magisk, Modules: None"));
-
-            break;
-          }
-        }
-      } else {
-        char *module_list = malloc(1);
-        if (module_list == NULL) {
-          LOGE("Failed allocating memory for module list.\n");
-
-          return;
-        }
-
-        size_t module_list_len = 0;
-
-        for (int i = 0; i < context.len; i++) {
-          if (i != context.len - 1) {
-            module_list = realloc(module_list, module_list_len + strlen(context.modules[i].name) + strlen(", ") + 1);
-            memcpy(module_list + module_list_len, context.modules[i].name, strlen(context.modules[i].name));
-
-            module_list_len += strlen(context.modules[i].name);
-
-            memcpy(module_list + module_list_len, ", ", strlen(", "));
-
-            module_list_len += strlen(", ");
-          } else {
-            module_list = realloc(module_list, module_list_len + strlen(context.modules[i].name) + 1);
-            memcpy(module_list + module_list_len, context.modules[i].name, strlen(context.modules[i].name));
-
-            module_list_len += strlen(context.modules[i].name);
-          }
-        }
-
-        msg = malloc(sizeof(struct MsgHead) + strlen("Root: , Modules: ") + root_impl_len + module_list_len + 1);
-        if (msg == NULL) {
-          LOGE("Failed allocating memory for message.\n");
-
-          return;
-        }
-
-        msg->cmd = DAEMON_SET_INFO;
-        msg->length = strlen("Root: , Modules: ") + root_impl_len + module_list_len + 1;
-
-        switch (impl) {
-          case None: { break; }
-          case Multiple: { break; }
-          case KernelSU: {
-            memcpy(msg->data, "Root: KernelSU, Modules: ", strlen("Root: KernelSU, Modules: "));
-
-            break;
-          }
-          case APatch: {
-            memcpy(msg->data, "Root: APatch, Modules: ", strlen("Root: APatch, Modules: "));
-
-            break;
-          }
-          case Magisk: {
-            memcpy(msg->data, "Root: Magisk, Modules: ", strlen("Root: Magisk, Modules: "));
-
-            break;
-          }
-        }
-        memcpy(msg->data + strlen("Root: , Modules: ") + root_impl_len, module_list, module_list_len);
-
-        free(module_list);
-      }
-
-      break;
     }
+
+    char impl_name[LONGEST_ROOT_IMPL_NAME];
+    stringify_root_impl_name(impl, impl_name);
+
+    struct MsgHead *msg = NULL;
+    msg = malloc(sizeof(struct MsgHead) + strlen("Root: , Modules: ") + strlen(impl_name) + module_list_len + 1);
+    msg->length = sprintf(msg->data, "Root: %s, Modules: %s", impl_name, module_list);
+    msg->cmd = DAEMON_SET_INFO;
+
+    unix_datagram_sendto(CONTROLLER_SOCKET, (void *)msg, sizeof(struct MsgHead) + msg->length);
+
+    free(msg);
+    free(module_list);
   }
-
-  unix_datagram_sendto(CONTROLLER_SOCKET, (void *)msg, sizeof(struct MsgHead) + msg->length);
-
-  free(msg);
 
   int socket_fd = create_daemon_socket();
   if (socket_fd == -1) {
@@ -534,6 +451,16 @@ void zygiskd_start(char *restrict argv[]) {
       case SystemServerStarted: {
         enum DaemonSocketAction msgr = SYSTEM_SERVER_STARTED;
         unix_datagram_sendto(CONTROLLER_SOCKET, &msgr, sizeof(enum DaemonSocketAction));
+
+        if (impl.impl == None || impl.impl == Multiple) {
+          LOGI("Unsupported environment detected. Exiting.\n");
+
+          close(client_fd);
+          close(socket_fd);
+          free_modules(&context);
+
+          exit(1);
+        }
 
         break;
       }
@@ -586,7 +513,7 @@ void zygiskd_start(char *restrict argv[]) {
           }
         }
 
-        switch (get_impl()) {
+        switch (impl.impl) {
           case None: { break; }
           case Multiple: { break; }
           case KernelSU: {
@@ -614,7 +541,7 @@ void zygiskd_start(char *restrict argv[]) {
       case GetInfo: {
         uint32_t flags = 0;
 
-        switch (get_impl()) {
+        switch (impl.impl) {
           case None: { break; }
           case Multiple: { break; }
           case KernelSU: {

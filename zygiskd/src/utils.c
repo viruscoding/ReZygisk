@@ -17,6 +17,7 @@
 #include <android/log.h>
 
 #include "utils.h"
+#include "root_impl/common.h"
 
 bool switch_mount_namespace(pid_t pid) {
   char path[PATH_MAX];
@@ -410,4 +411,38 @@ int non_blocking_execv(const char *restrict file, char *const argv[]) {
   }
 
   return -1;
+}
+
+void stringify_root_impl_name(struct root_impl impl, char *restrict output) {
+  switch (impl.impl) {
+    case None: {
+      strcpy(output, "None");
+
+      break;
+    }
+    case Multiple: {
+      strcpy(output, "Multiple");
+
+      break;
+    }
+    case KernelSU: {
+      strcpy(output, "KernelSU");
+
+      break;
+    }
+    case APatch: {
+      strcpy(output, "APatch");
+
+      break;
+    }
+    case Magisk: {
+      if (impl.variant == 0) {
+        strcpy(output, "Magisk Official");
+      } else {
+        strcpy(output, "Magisk Kitsune");
+      }
+
+      break;
+    }
+  }
 }

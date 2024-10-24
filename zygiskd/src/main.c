@@ -14,7 +14,11 @@
 int __android_log_print(int prio, const char *tag, const char *fmt, ...);
 
 int main(int argc, char *argv[]) {
-  LOGI("Initializing zygiskd: %s\n", argv[0]);
+  #ifdef __LP64__
+    LOGI("Welcome to ReZygisk %s Zygiskd64!\n", ZKSU_VERSION);
+  #else
+    LOGI("Welcome to ReZygisk %s Zygiskd32!\n", ZKSU_VERSION);
+  #endif
 
   if (argc > 1) {
     if (strcmp(argv[1], "companion") == 0) {
@@ -38,37 +42,14 @@ int main(int argc, char *argv[]) {
 
     else if (strcmp(argv[1], "root") == 0) {
       root_impls_setup();
-      enum RootImpl impl = get_impl();
 
-      switch (impl) {
-        case None: {
-          LOGI("No root implementation found.\n");
+      struct root_impl impl;
+      get_impl(&impl);
 
-          return 1;
-        }
+      char impl_name[LONGEST_ROOT_IMPL_NAME];
+      stringify_root_impl_name(impl, impl_name);
 
-        case Multiple: {
-          LOGI("Multiple root implementations found.\n");
-
-          return 1;
-        }
-
-        case KernelSU: {
-          LOGI("KernelSU root implementation found.\n");
-
-          return 0;
-        }
-        case APatch: {
-          LOGI("APatch root implementation found.\n");
-
-          return 0;
-        }
-        case Magisk: {
-          LOGI("Magisk root implementation found.\n");
-
-          return 0;
-        }
-      }
+      LOGI("Root implementation: %s\n", impl_name);
 
       return 0;
     }

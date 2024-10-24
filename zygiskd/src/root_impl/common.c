@@ -9,15 +9,34 @@
 
 #include "common.h"
 
-static enum RootImpl ROOT_IMPL = None;
+static struct root_impl impl;
 
 void root_impls_setup(void) {
-  if (ksu_get_existence() == Supported) ROOT_IMPL = KernelSU;
-  else if (apatch_get_existence() == Supported) ROOT_IMPL = APatch;
-  else if (magisk_get_existence() == Supported) ROOT_IMPL = Magisk;
-  else ROOT_IMPL = None;
+  struct root_impl_state state_ksu;
+  ksu_get_existence(&state_ksu);
 
-  switch (ROOT_IMPL) {
+  struct root_impl_state state_apatch;
+  apatch_get_existence(&state_apatch);
+
+  struct root_impl_state state_magisk;
+  magisk_get_existence(&state_magisk);
+
+  /* INFO: Check if it's only one supported, if not, it's multile and that's bad.
+            Remember that true here is equal to the integer 1. */
+  if ((state_ksu.state == Supported ? 1 : 0) + (state_apatch.state == Supported ? 1 : 0) + (state_magisk.state == Supported ? 1 : 0) >= 2) {
+    impl.impl = Multiple;
+  } else if (state_ksu.state == Supported) {
+    impl.impl = KernelSU;
+  } else if (state_apatch.state == Supported) {
+    impl.impl = APatch;
+  } else if (state_magisk.state == Supported) {
+    impl.impl = Magisk;
+    impl.variant = state_magisk.variant;
+  } else {
+    impl.impl = None;
+  }
+
+  switch (impl.impl) {
     case None: {
       LOGI("No root implementation found.\n");
 
@@ -39,19 +58,24 @@ void root_impls_setup(void) {
       break;
     }
     case Magisk: {
-      LOGI("Magisk root implementation found.\n");
+      if (state_magisk.variant == 0) {
+        LOGI("Magisk Official root implementation found.\n");
+      } else {
+        LOGI("Magisk Kitsune root implementation found.\n");
+      }
 
       break;
     }
   }
 }
 
-enum RootImpl get_impl(void) {
-  return ROOT_IMPL;
+void get_impl(struct root_impl *uimpl) {
+  uimpl->impl = impl.impl;
+  uimpl->variant = impl.variant;
 }
 
 bool uid_granted_root(uid_t uid) {
-  switch (get_impl()) {
+  switch (impl.impl) {
     case KernelSU: {
       return ksu_uid_granted_root(uid);
     }
@@ -68,7 +92,7 @@ bool uid_granted_root(uid_t uid) {
 }
 
 bool uid_should_umount(uid_t uid) {
-  switch (get_impl()) {
+  switch (impl.impl) {
     case KernelSU: {
       return ksu_uid_should_umount(uid);
     }
@@ -85,7 +109,7 @@ bool uid_should_umount(uid_t uid) {
 }
 
 bool uid_is_manager(uid_t uid) {
-  switch (get_impl()) {
+  switch (impl.impl) {
     case KernelSU: {
       return ksu_uid_is_manager(uid);
     }

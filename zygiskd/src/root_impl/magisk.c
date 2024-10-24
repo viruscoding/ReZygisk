@@ -10,6 +10,7 @@
 
 #include "../constants.h"
 #include "../utils.h"
+#include "common.h"
 
 #include "magisk.h"
 
@@ -30,7 +31,7 @@ enum magisk_variants variant = Official;
 /* INFO: Longest path */
 static char path_to_magisk[sizeof(DEBUG_RAMDISK_MAGISK)];
 
-enum RootImplState magisk_get_existence(void) {
+void magisk_get_existence(struct root_impl_state *state) {
   struct stat s;
   if (stat(SBIN_MAGISK, &s) != 0) {
     if (errno != ENOENT) {
@@ -50,7 +51,9 @@ enum RootImplState magisk_get_existence(void) {
         }
         errno = 0;
 
-        return Inexistent;
+        state->state = Inexistent;
+
+        return;
       }
 
       /* INFO: /debug_ramdisk/magisk64 (or 32) doesn't exist but /debug_ramdisk/magisk does */
@@ -71,11 +74,20 @@ enum RootImplState magisk_get_existence(void) {
     LOGE("Failed to execute magisk binary: %s\n", strerror(errno));
     errno = 0;
 
-    return Abnormal;
+    state->state = Abnormal;
+
+    return;
   }
 
+  state->variant = (uint8_t)Official;
+
   for (unsigned long i = 0; i < sizeof(supported_variants) / sizeof(supported_variants[0]); i++) {
-    if (strstr(magisk_info, supported_variants[i])) variant = (enum magisk_variants)(i + 1);
+    if (strstr(magisk_info, supported_variants[i])) {
+      variant = (enum magisk_variants)(i + 1);
+      state->variant = (uint8_t)variant;
+
+      break;
+    }
   }
 
   argv[1] = "-V";
@@ -85,11 +97,13 @@ enum RootImplState magisk_get_existence(void) {
     LOGE("Failed to execute magisk binary: %s\n", strerror(errno));
     errno = 0;
 
-    return Abnormal;
+    state->state = Abnormal;
+
+    return;
   }
 
-  if (atoi(magisk_version) >= MIN_MAGISK_VERSION) return Supported;
-  else return TooOld;
+  if (atoi(magisk_version) >= MIN_MAGISK_VERSION) state->state = Supported;
+  else state->state = TooOld;
 }
 
 bool magisk_uid_granted_root(uid_t uid) {

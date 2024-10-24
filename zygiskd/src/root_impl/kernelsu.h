@@ -3,7 +3,7 @@
 
 #include "../constants.h"
 
-enum RootImplState ksu_get_existence(void);
+void ksu_get_existence(struct root_impl_state *state);
 
 bool ksu_uid_granted_root(uid_t uid);
 
