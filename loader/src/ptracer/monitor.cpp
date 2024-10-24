@@ -675,14 +675,14 @@ static char post_section[1024];
 
 #define WRITE_STATUS_ABI(suffix)                                                     \
   if (status ## suffix.supported) {                                                  \
-    strcat(status_text, " zygote" # suffix ":");                                     \
+    strcat(status_text, " zygote" # suffix ": ");                                    \
     if (tracing_state != TRACING) strcat(status_text, "❓ unknown, ");               \
     else if (status ## suffix.zygote_injected) strcat(status_text, "😋 injected, "); \
     else strcat(status_text, "❌ not injected, ");                                   \
                                                                                      \
-    strcat(status_text, " daemon" # suffix ":");                                     \
+    strcat(status_text, " daemon" # suffix ": ");                                    \
     if (status ## suffix.daemon_running) {                                           \
-      strcat(status_text, "😋running");                                              \
+      strcat(status_text, "😋 running ");                                            \
                                                                                      \
       if (status ## suffix.daemon_info != NULL) {                                    \
         strcat(status_text, "(");                                                    \
@@ -706,18 +706,18 @@ static void updateStatus() {
 
   switch (tracing_state) {
     case TRACING: {
-      strcat(status_text, "😋 tracing");
+      strcat(status_text, "😋 tracing ");
 
       break;
     }
     case STOPPING: [[fallthrough]];
     case STOPPED: {
-      strcat(status_text, "❌ stopped");
+      strcat(status_text, "❌ stopped ");
 
       break;
     }
     case EXITING: {
-      strcat(status_text, "❌ exited");
+      strcat(status_text, "❌ exited ");
 
       break;
     }
