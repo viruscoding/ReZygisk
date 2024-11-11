@@ -57,6 +57,8 @@ enum zygote_root_impl {
 struct zygote_info {
   struct zygote_modules *modules;
   enum zygote_root_impl root_impl;
+  pid_t pid;
+  bool running;
 };
 
 namespace zygiskd {
