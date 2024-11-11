@@ -744,77 +744,6 @@ static void updateStatus() {
   fprintf(prop, "%s[%s] %s", pre_section, status_text, post_section);
 
   fclose(prop);
-
-  struct zygote_info info;
-  zygiskd::GetInfo(&info);
-
-  /* TODO: Perhaps change to binary reading and writing? */
-  FILE *fd_state = fopen("/data/adb/rezygisk/state.json", "w");
-  if (fd_state == NULL) {
-    PLOGE("failed to open state.json");
-
-    return;
-  }
-
-  fprintf(fd_state, "{\n"
-                    "  \"tracing_state\": %d,\n"
-                    "  \"status64\": {\n"
-                    "    \"supported\": %d,\n"
-                    "    \"zygote_injected\": %d,\n"
-                    "    \"daemon_running\": %d,\n"
-                    "    \"daemon_pid\": %d,\n"
-                    "    \"daemon_info\": \"%s\",\n"
-                    "    \"daemon_error_info\": \"%s\"\n"
-                    "  },\n"
-                    "  \"status32\": {\n"
-                    "    \"supported\": %d,\n"
-                    "    \"zygote_injected\": %d,\n"
-                    "    \"daemon_running\": %d,\n"
-                    "    \"daemon_pid\": %d,\n"
-                    "    \"daemon_info\": \"%s\",\n"
-                    "    \"daemon_error_info\": \"%s\"\n"
-                    "  },\n"
-                    "  \"modules_info\": {\n"
-                    "    \"amount\": %d,\n",
-          tracing_state,
-
-          status64.supported,
-          status64.zygote_injected,
-          status64.daemon_running,
-          status64.daemon_pid,
-          status64.daemon_info,
-          status64.daemon_error_info,
-
-          status32.supported,
-          status32.zygote_injected,
-          status32.daemon_running,
-          status32.daemon_pid,
-          status32.daemon_info,
-          status32.daemon_error_info,
-          
-          info.modules->modules_count);
-  
-  if (info.modules->modules_count != 0) {
-    fprintf(fd_state, "    \"modules\": [\n");
-
-    for (int i = 0; i < info.modules->modules_count; i++) {
-      fprintf(fd_state, "      \"%s\"%s\n",
-              info.modules->modules[i],
-              i == info.modules->modules_count - 1 ? "" : ",");
-
-      free(info.modules->modules[i]);
-    }
-
-    fprintf(fd_state, "    ]\n");
-
-    free(info.modules->modules);
-  } else {
-    fprintf(fd_state, "    \"modules\": []\n");
-  }
-
-  fprintf(fd_state, "}\n");
-
-  fclose(fd_state);
 }
 
 static bool prepare_environment() {
@@ -850,7 +779,6 @@ static bool prepare_environment() {
 
   /* TODO: See if ZYGISK_ENABLED flag is already set,
              if so, set a status saying to disable built-in Zygisk. */
-A
   updateStatus();
 
   return true;
