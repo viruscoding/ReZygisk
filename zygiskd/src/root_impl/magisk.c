@@ -24,6 +24,7 @@ char *magisk_managers[] = {
 };
 
 #define SBIN_MAGISK lp_select("/sbin/magisk32", "/sbin/magisk64")
+#define BITLESS_SBIN_MAGISK "/sbin/magisk"
 #define DEBUG_RAMDISK_MAGISK lp_select("/debug_ramdisk/magisk32", "/debug_ramdisk/magisk64")
 #define BITLESS_DEBUG_RAMDISK_MAGISK "/debug_ramdisk/magisk"
 
@@ -39,31 +40,41 @@ void magisk_get_existence(struct root_impl_state *state) {
     }
     errno = 0;
 
-    if (stat(DEBUG_RAMDISK_MAGISK, &s) != 0) {
+    if (stat(BITLESS_SBIN_MAGISK, &s) != 0) {
       if (errno != ENOENT) {
-        LOGE("Failed to stat Magisk %s binary: %s\n", DEBUG_RAMDISK_MAGISK, strerror(errno));
+        LOGE("Failed to stat Magisk %s binary: %s\n", BITLESS_SBIN_MAGISK, strerror(errno));
       }
       errno = 0;
 
-      if (stat(BITLESS_DEBUG_RAMDISK_MAGISK, &s) != 0) {
+      if (stat(DEBUG_RAMDISK_MAGISK, &s) != 0) {
         if (errno != ENOENT) {
-          LOGE("Failed to stat Magisk /debug_ramdisk/magisk binary: %s\n", strerror(errno));
+          LOGE("Failed to stat Magisk %s binary: %s\n", DEBUG_RAMDISK_MAGISK, strerror(errno));
         }
         errno = 0;
 
-        state->state = Inexistent;
+        if (stat(BITLESS_DEBUG_RAMDISK_MAGISK, &s) != 0) {
+          if (errno != ENOENT) {
+            LOGE("Failed to stat Magisk /debug_ramdisk/magisk binary: %s\n", strerror(errno));
+          }
+          errno = 0;
 
-        return;
+          state->state = Inexistent;
+
+          return;
+        }
+
+        /* INFO: /debug_ramdisk/magisk64 (or 32) doesn't exist but /debug_ramdisk/magisk does */
+        strcpy(path_to_magisk, BITLESS_DEBUG_RAMDISK_MAGISK);
+      } else {
+        /* INFO: /sbin/magisk doesn't exist but /debug_ramdisk/magisk does */
+        strcpy(path_to_magisk, DEBUG_RAMDISK_MAGISK);
       }
-
-      /* INFO: /debug_ramdisk/magisk64 (or 32) doesn't exist but /debug_ramdisk/magisk does */
-      strcpy(path_to_magisk, BITLESS_DEBUG_RAMDISK_MAGISK);
     } else {
-      /* INFO: /sbin/magisk doesn't exist but /debug_ramdisk/magisk does */
-      strcpy(path_to_magisk, DEBUG_RAMDISK_MAGISK);
+      /* INFO: /sbin/magisk64 (or 32) doesn't exist but /sbin/magisk does */
+      strcpy(path_to_magisk, BITLESS_SBIN_MAGISK);
     }
   } else {
-    /* INFO: /sbin/magisk exists */
+    /* INFO: /sbin/magisk64 (or 32) exists */
     strcpy(path_to_magisk, SBIN_MAGISK);
   }
 
