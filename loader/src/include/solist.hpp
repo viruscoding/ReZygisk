@@ -11,18 +11,25 @@ namespace SoList  {
   class SoInfo {
     public:
       #ifdef __LP64__
-        inline static size_t solist_next_offset = 0x30;
+        inline static size_t solist_size_offset = 0x18;
+        inline static size_t solist_next_offset = 0x28;
         constexpr static size_t solist_realpath_offset = 0x1a8;
       #else
+        inline static size_t solist_size_offset = 0x90;
         inline static size_t solist_next_offset = 0xa4;
         constexpr static size_t solist_realpath_offset = 0x174;
       #endif
 
       inline static const char *(*get_realpath_sym)(SoInfo *) = NULL;
       inline static const char *(*get_soname_sym)(SoInfo *) = NULL;
+      inline static void (*soinfo_free)(SoInfo *) = NULL;
 
       inline SoInfo *get_next() {
         return *(SoInfo **) ((uintptr_t) this + solist_next_offset);
+      }
+
+      inline size_t get_size() {
+        return *(size_t *) ((uintptr_t) this + solist_size_offset);
       }
 
       inline const char *get_path() {
@@ -39,6 +46,10 @@ namespace SoList  {
 
       void set_next(SoInfo *si) {
         *(SoInfo **) ((uintptr_t) this + solist_next_offset) = si;
+      }
+
+      void set_size(size_t size) {
+        *(size_t *) ((uintptr_t) this + solist_size_offset) = size;
       }
   };
 
@@ -69,8 +80,8 @@ namespace SoList  {
     private:
       using FuncType = void (ProtectedDataGuard::*)();
 
-      static FuncType ctor;
-      static FuncType dtor;
+      inline static FuncType ctor = NULL;
+      inline static FuncType dtor = NULL;
 
       union MemFunc {
         FuncType f;
@@ -86,8 +97,6 @@ namespace SoList  {
   static SoInfo *solist = NULL;
   static SoInfo *somain = NULL;
   static SoInfo **sonext = NULL;
-  ProtectedDataGuard::FuncType ProtectedDataGuard::ctor = NULL;
-  ProtectedDataGuard::FuncType ProtectedDataGuard::dtor = NULL;
 
   static bool Initialize();
 
@@ -103,23 +112,22 @@ namespace SoList  {
       LOGE("Failed to initialize solist");
       return;
     }
-    SoInfo *prev = NULL;
     for (auto iter = solist; iter; iter = iter->get_next()) {
-      if (prev != NULL && iter->get_name() && iter->get_path() && strstr(iter->get_path(), target_path)) {
+      if (iter->get_name() && iter->get_path() && strstr(iter->get_path(), target_path)) {
         SoList::ProtectedDataGuard guard;
-        prev->set_next(iter->get_next());
-        if (iter == *sonext) {
-            *sonext = prev;
+        LOGI("dropping solist record for %s loaded at %s with size %zu", iter->get_name(), iter->get_path(), iter->get_size());
+        if (iter->get_size() > 0) {
+            iter->set_size(0);
+            SoInfo::soinfo_free(iter);
         }
-        LOGI("Dropped solist record for %s loaded at %s", iter->get_name(), iter->get_path());
       }
-      prev = iter;
     }
   }
 
   static bool Initialize() {
     SandHook::ElfImg linker("/linker");
     if (!ProtectedDataGuard::setup(linker)) return false;
+    LOGD("found symbol ProtectedDataGuard");
 
     /* INFO: Since Android 15, the symbol names for the linker have a suffix,
                 this makes it impossible to hardcode the symbol names. To allow
@@ -131,6 +139,11 @@ namespace SoList  {
 
     std::string_view solist_sym_name = linker.findSymbolNameByPrefix("__dl__ZL6solist");
     if (solist_sym_name.empty()) return false;
+    LOGD("found symbol name %s", solist_sym_name.data());
+
+    std::string_view soinfo_free_name = linker.findSymbolNameByPrefix("__dl__ZL11soinfo_freeP6soinfo");
+    if (soinfo_free_name.empty()) return false;
+    LOGD("found symbol name %s", soinfo_free_name.data());
 
     /* INFO: The size isn't a magic number, it's the size for the string: .llvm.7690929523238822858 */
     char llvm_sufix[25 + 1];
@@ -143,6 +156,7 @@ namespace SoList  {
 
     solist = getStaticPointer<SoInfo>(linker, solist_sym_name.data());
     if (solist == NULL) return false;
+    LOGD("found symbol solist");
 
     char somain_sym_name[sizeof("__dl__ZL6somain") + sizeof(llvm_sufix)];
     snprintf(somain_sym_name, sizeof(somain_sym_name), "__dl__ZL6somain%s", llvm_sufix);
@@ -150,30 +164,51 @@ namespace SoList  {
     char sonext_sym_name[sizeof("__dl__ZL6sonext") + sizeof(llvm_sufix)];
     snprintf(sonext_sym_name, sizeof(somain_sym_name), "__dl__ZL6sonext%s", llvm_sufix);
 
-    char vsdo_sym_name[sizeof("__dl__ZL4vdso") + sizeof(llvm_sufix)];
-    snprintf(vsdo_sym_name, sizeof(vsdo_sym_name), "__dl__ZL4vdso%s", llvm_sufix);
+    char vdso_sym_name[sizeof("__dl__ZL4vdso") + sizeof(llvm_sufix)];
+    snprintf(vdso_sym_name, sizeof(vdso_sym_name), "__dl__ZL4vdso%s", llvm_sufix);
 
     somain = getStaticPointer<SoInfo>(linker, somain_sym_name);
     if (somain == NULL) return false;
+    LOGD("found symbol somain");
 
     sonext = linker.getSymbAddress<SoInfo **>(sonext_sym_name);
     if (sonext == NULL) return false;
+    LOGD("found symbol sonext");
 
-    SoInfo *vsdo = getStaticPointer<SoInfo>(linker, vsdo_sym_name);
-    if (vsdo == NULL) return false;
+    SoInfo *vdso = getStaticPointer<SoInfo>(linker, vdso_sym_name);
+    if (vdso != NULL) {
+        LOGD("found symbol vdso");
+    } else {
+        LOGD("symbol vdso is missing");
+    }
 
     SoInfo::get_realpath_sym = reinterpret_cast<decltype(SoInfo::get_realpath_sym)>(linker.getSymbAddress("__dl__ZNK6soinfo12get_realpathEv"));
+    if (SoInfo::get_realpath_sym == NULL) return false;
+    LOGD("found symbol get_realpath_sym");
+
     SoInfo::get_soname_sym = reinterpret_cast<decltype(SoInfo::get_soname_sym)>(linker.getSymbAddress("__dl__ZNK6soinfo10get_sonameEv"));
+    if (SoInfo::get_soname_sym == NULL) return false;
+    LOGD("found symbol get_soname_sym");
+
+    SoInfo::soinfo_free = reinterpret_cast<decltype(SoInfo::soinfo_free)>(linker.getSymbAddress(soinfo_free_name));
+    if (SoInfo::soinfo_free == NULL) return false;
+    LOGD("found symbol soinfo_free");
+
 
     for (size_t i = 0; i < 1024 / sizeof(void *); i++) {
-      auto *possible_next = *(void **) ((uintptr_t) solist + i * sizeof(void *));
-      if (possible_next == somain || (vsdo != NULL && possible_next == vsdo)) {
+      auto possible_field = (uintptr_t) solist + i * sizeof(void *);
+      auto possible_size_of_somain = *(size_t *)((uintptr_t) somain + i * sizeof(void *));
+      if (possible_size_of_somain < 0x100000 && possible_size_of_somain > 0x100) {
+        SoInfo::solist_size_offset = i * sizeof(void *);
+        LOGD("solist_size_offset is %zu * %zu = %p", i, sizeof(void *), (void*) SoInfo::solist_size_offset);
+      }
+      if (*(void **)possible_field == somain || (vdso != NULL && *(void **)possible_field == vdso)) {
         SoInfo::solist_next_offset = i * sizeof(void *);
-
+        LOGD("solist_next_offset is %zu * %zu = %p", i, sizeof(void *), (void*) SoInfo::solist_next_offset);
         break;
       }
     }
 
-    return (SoInfo::get_realpath_sym != NULL && SoInfo::get_soname_sym != NULL);
+    return true;
   }
 }
