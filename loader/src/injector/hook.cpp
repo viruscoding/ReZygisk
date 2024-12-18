@@ -122,6 +122,7 @@ struct ZygiskContext {
 vector<tuple<dev_t, ino_t, const char *, void **>> *plt_hook_list;
 map<string, vector<JNINativeMethod>, StringCmp> *jni_hook_list;
 bool should_unmap_zygisk = false;
+std::vector<lsplt::MapInfo> cached_map_infos = {};
 
 } // namespace
 
@@ -176,22 +177,24 @@ DCL_HOOK_FUNC(void, android_log_close) {
 
 // We cannot directly call `dlclose` to unload ourselves, otherwise when `dlclose` returns,
 // it will return to our code which has been unmapped, causing segmentation fault.
-// Instead, we hook `pthread_attr_destroy` which will be called when VM daemon threads start.
-DCL_HOOK_FUNC(int, pthread_attr_destroy, void *target) {
-    int res = old_pthread_attr_destroy((pthread_attr_t *)target);
+// Instead, we hook `pthread_attr_setstacksize` which will be called when VM daemon threads start.
+DCL_HOOK_FUNC(int, pthread_attr_setstacksize, void *target, size_t size) {
+    int res = old_pthread_attr_setstacksize((pthread_attr_t *)target, size);
+    LOGV("Call pthread_attr_setstacksize in [tid, pid]: %d, %d", gettid(), getpid());
 
     // Only perform unloading on the main thread
     if (gettid() != getpid())
         return res;
 
-    LOGV("pthread_attr_destroy");
     if (should_unmap_zygisk) {
         unhook_functions();
+        cached_map_infos.clear();
         if (should_unmap_zygisk) {
-            // Because both `pthread_attr_destroy` and `dlclose` have the same function signature,
+            // Because both `pthread_attr_setstacksize` and `dlclose` have the same function signature,
             // we can use `musttail` to let the compiler reuse our stack frame and thus
-            // `dlclose` will directly return to the caller of `pthread_attr_destroy`.
-            [[clang::musttail]] return dlclose(self_handle);
+            // `dlclose` will directly return to the caller of `pthread_attr_setstacksize`.
+            LOGI("unmap libzygisk.so loaded at %p with size %zu", start_addr, block_size);
+            [[clang::musttail]] return munmap(start_addr, block_size);
         }
     }
 
@@ -204,6 +207,8 @@ DCL_HOOK_FUNC(char *, strdup, const char *s) {
   if (strcmp(s, "com.android.internal.os.ZygoteInit") == 0) {
       LOGV("strdup %s", s);
       initialize_jni_hook();
+      cached_map_infos = lsplt::MapInfo::Scan();
+      LOGD("cached_map_infos updated");
     }
 
     return old_strdup(s);
@@ -267,7 +272,7 @@ void initialize_jni_hook() {
     auto get_created_java_vms = reinterpret_cast<jint (*)(JavaVM **, jsize, jsize *)>(
             dlsym(RTLD_DEFAULT, "JNI_GetCreatedJavaVMs"));
     if (!get_created_java_vms) {
-        for (auto &map: lsplt::MapInfo::Scan()) {
+        for (auto &map: cached_map_infos) {
             if (!map.path.ends_with("/libnativehelper.so")) continue;
             void *h = dlopen(map.path.data(), RTLD_LAZY);
             if (!h) {
@@ -348,7 +353,7 @@ bool ZygiskModule::RegisterModuleImpl(ApiTable *api, long *module) {
         api->v2.getFlags = [](auto) { return ZygiskModule::getFlags(); };
     }
     if (api_version >= 4) {
-        api->v4.pltHookCommit = lsplt::CommitHook;
+        api->v4.pltHookCommit = []() { return lsplt::CommitHook(cached_map_infos); };
         api->v4.pltHookRegister = [](dev_t dev, ino_t inode, const char *symbol, void *fn, void **backup) {
             if (dev == 0 || inode == 0 || symbol == nullptr || fn == nullptr)
                 return;
@@ -382,7 +387,7 @@ void ZygiskContext::plt_hook_exclude(const char *regex, const char *symbol) {
 void ZygiskContext::plt_hook_process_regex() {
     if (register_info.empty())
         return;
-    for (auto &map : lsplt::MapInfo::Scan()) {
+    for (auto &map : cached_map_infos) {
         if (map.offset != 0 || !map.is_private || !(map.perms & PROT_READ)) continue;
         for (auto &reg: register_info) {
             if (regexec(&reg.regex, map.path.data(), 0, nullptr, 0) != 0)
@@ -410,7 +415,7 @@ bool ZygiskContext::plt_hook_commit() {
         register_info.clear();
         ignore_info.clear();
     }
-    return lsplt::CommitHook();
+    return lsplt::CommitHook(cached_map_infos);
 }
 
 
@@ -573,88 +578,20 @@ void ZygiskContext::run_modules_pre() {
 
 void ZygiskContext::run_modules_post() {
     flags[POST_SPECIALIZE] = true;
+
+    size_t modules_unloaded = 0;
     for (const auto &m : modules) {
         if (flags[APP_SPECIALIZE]) {
             m.postAppSpecialize(args.app);
         } else if (flags[SERVER_FORK_AND_SPECIALIZE]) {
             m.postServerSpecialize(args.server);
         }
-        m.tryUnload();
+        if (m.tryUnload()) modules_unloaded++;
     }
 
-    SoList::DropSoPath("jit-cache");
-
-    // Remap as well to avoid checking of /memfd:jit-cache
-    for (auto &info : lsplt::MapInfo::Scan()) {
-        if (strstr(info.path.c_str(), "jit-cache-zygisk"))
-        {
-            void *addr = (void *)info.start;
-            size_t size = info.end - info.start;
-            // MAP_SHARED should fix the suspicious mapping.
-            void *copy = mmap(nullptr, size, PROT_WRITE, MAP_ANONYMOUS | MAP_SHARED, -1, 0);
-            if (copy == MAP_FAILED) {
-                LOGE("Failed to mmap jit-cache-zygisk");
-                continue;
-            }
-
-            if ((info.perms & PROT_READ) == 0) {
-                mprotect(addr, size, PROT_READ);
-            }
-            memcpy(copy, addr, size);
-            mremap(copy, size, size, MREMAP_MAYMOVE | MREMAP_FIXED, addr);
-            mprotect(addr, size, info.perms);
-        }
-    }
-
-    // Don't know if there's a header for things like this
-    // so I just put it into a lambda
-    auto generateRandomString = [](char *str, int length) {
-        const char charset[] = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-        srand(time(NULL));
-
-        for (int i = 0; i < length; i++) {
-            int key = rand() % (sizeof(charset) - 1);
-            str[i] = charset[key];
-        }
-
-        str[length] = '\0';
-    };
-
-    // Randomize name of anonymous mappings
-    // We don't run this in the previous loop because LSPosed might also add
-    // mappings that are not related to /memfd:jit-zygisk-cache
-    //
-    // Since we changed to MAP_SHARED, I don't think this is still needed but let's
-    // leave it here just in case.
-    for (auto info : lsplt::MapInfo::Scan()) {
-        // I had some problems with info.perms & PROT_EXEC so I had to change lsplt source a bit.
-        // If that problem occurs here, do strchr(info.perms_str.c_str(), 'x') instead and add perms_str
-        // to the lsplt MapInfo struct and set it to the raw perms string in Scan();
-        if (info.perms & PROT_EXEC && info.path.empty()) {
-            // Generate Random Name
-            char randomString[11];
-            generateRandomString(randomString, 10);
-            LOGI("Randomized Memory map name: %s", randomString);
-
-            // Memory address of random string
-            uintptr_t strAddr = (uintptr_t)&randomString;
-
-            // https://lore.kernel.org/lkml/1383170047-21074-2-git-send-email-ccross@android.com/
-            prctl(PR_SET_VMA, PR_SET_VMA_ANON_NAME, info.start, info.end - info.start, strAddr);
-        }
-
-        // Remap as MAP_SHARED
-        if (info.perms & PROT_EXEC && info.dev == 0 && info.path.find("anon") != std::string::npos) {
-            void *addr = reinterpret_cast<void *>(info.start);
-            size_t size = info.end - info.start;
-            void *copy = mmap(nullptr, size, PROT_WRITE, MAP_ANONYMOUS | MAP_SHARED, -1, 0);
-            if ((info.perms & PROT_READ) == 0) {
-                mprotect(addr, size, PROT_READ);
-            }
-            memcpy(copy, addr, size);
-            mremap(copy, size, size, MREMAP_MAYMOVE | MREMAP_FIXED, addr);
-            mprotect(addr, size, info.perms);
-        }
+    if (modules.size() > 0) {
+        LOGD("modules unloaded: %zu/%zu", modules_unloaded, modules.size());
+        clean_trace("jit-cache-zygisk", modules.size(), modules_unloaded, true);
     }
 }
 
@@ -791,8 +728,8 @@ ZygiskContext::~ZygiskContext() {
 
 } // namespace
 
-static bool hook_commit() {
-    if (lsplt::CommitHook()) {
+static bool hook_commit(std::vector<lsplt::MapInfo> &map_infos = cached_map_infos) {
+    if (lsplt::CommitHook(map_infos)) {
         return true;
     } else {
         LOGE("plt_hook failed");
@@ -814,6 +751,37 @@ static void hook_register(dev_t dev, ino_t inode, const char *symbol, void *new_
 #define PLT_HOOK_REGISTER(DEV, INODE, NAME) \
     PLT_HOOK_REGISTER_SYM(DEV, INODE, #NAME, NAME)
 
+void clean_trace(const char* path, size_t load, size_t unload, bool spoof_maps) {
+    LOGD("cleaning trace for path %s", path);
+
+    if (load > 0 || unload >0) SoList::ResetCounters(load, unload);
+    bool path_found = SoList::DropSoPath(path);
+    if (!path_found || !spoof_maps) return;
+
+    LOGD("spoofing virtual maps for %s", path);
+    // spoofing map names is futile in Android, we do it simply
+    // to avoid Zygisk detections based on string comparison
+    for (auto &map : lsplt::MapInfo::Scan()) {
+        if (strstr(map.path.c_str(), path))
+        {
+            void *addr = (void *)map.start;
+            size_t size = map.end - map.start;
+            void *copy = mmap(nullptr, size, PROT_WRITE, MAP_ANONYMOUS | MAP_SHARED, -1, 0);
+            if (copy == MAP_FAILED) {
+                LOGE("failed to backup block %s [%p, %p]", map.path.c_str(), addr, (void*)map.end);
+                continue;
+            }
+
+            if ((map.perms & PROT_READ) == 0) {
+                mprotect(addr, size, PROT_READ);
+            }
+            memcpy(copy, addr, size);
+            mremap(copy, size, size, MREMAP_MAYMOVE | MREMAP_FIXED, addr);
+            mprotect(addr, size, map.perms);
+        }
+    }
+}
+
 void hook_functions() {
     default_new(plt_hook_list);
     default_new(jni_hook_list);
@@ -824,7 +792,8 @@ void hook_functions() {
     // ino_t native_bridge_inode = 0;
     // dev_t native_bridge_dev = 0;
 
-    for (auto &map : lsplt::MapInfo::Scan()) {
+    cached_map_infos = lsplt::MapInfo::Scan();
+    for (auto &map : cached_map_infos) {
         if (map.path.ends_with("libandroid_runtime.so")) {
             android_runtime_inode = map.inode;
             android_runtime_dev = map.dev;
@@ -850,7 +819,7 @@ static void hook_unloader() {
     ino_t art_inode = 0;
     dev_t art_dev = 0;
 
-    for (auto &map : lsplt::MapInfo::Scan()) {
+    for (auto &map : cached_map_infos) {
         if (map.path.ends_with("/libart.so")) {
             art_inode = map.inode;
             art_dev = map.dev;
@@ -858,7 +827,13 @@ static void hook_unloader() {
         }
     }
 
-    PLT_HOOK_REGISTER(art_dev, art_inode, pthread_attr_destroy);
+    if (art_dev == 0 || art_inode == 0) {
+        LOGE("virtual map for libart.so is not cached");
+        return;
+    } else {
+        LOGD("hook_unloader called with libart.so [%zu:%lu]", art_dev, art_inode);
+    }
+    PLT_HOOK_REGISTER(art_dev, art_inode, pthread_attr_setstacksize);
     hook_commit();
 }
 
