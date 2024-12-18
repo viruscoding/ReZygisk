@@ -270,13 +270,13 @@ struct SocketHandler : public EventHandler {
           LOGD("received daemon64 info %s", msg->data);
 
           /* Will only happen if somehow the daemon restarts */
-          if (status64.daemon_info != NULL) {
+          if (status64.daemon_info) {
             free(status64.daemon_info);
             status64.daemon_info = NULL;
           }
 
           status64.daemon_info = (char *)malloc(msg->length);
-          if (status64.daemon_info == NULL) {
+          if (!status64.daemon_info) {
             PLOGE("malloc daemon64 info");
 
             break;
@@ -291,13 +291,13 @@ struct SocketHandler : public EventHandler {
         case DAEMON32_SET_INFO: {
           LOGD("received daemon32 info %s", msg->data);
 
-          if (status32.daemon_info != NULL) {
+          if (status32.daemon_info) {
             free(status32.daemon_info);
             status32.daemon_info = NULL;
           }
 
           status32.daemon_info = (char *)malloc(msg->length);
-          if (status32.daemon_info == NULL) {
+          if (!status32.daemon_info) {
             PLOGE("malloc daemon32 info");
 
             break;
@@ -314,13 +314,13 @@ struct SocketHandler : public EventHandler {
 
           status64.daemon_running = false;
 
-          if (status64.daemon_error_info != NULL) {
+          if (status64.daemon_error_info) {
             free(status64.daemon_error_info);
             status64.daemon_error_info = NULL;
           }
 
           status64.daemon_error_info = (char *)malloc(msg->length);
-          if (status64.daemon_error_info == NULL) {
+          if (!status64.daemon_error_info) {
             PLOGE("malloc daemon64 error info");
 
             break;
@@ -337,13 +337,13 @@ struct SocketHandler : public EventHandler {
 
           status32.daemon_running = false;
 
-          if (status32.daemon_error_info != NULL) {
+          if (status32.daemon_error_info) {
             free(status32.daemon_error_info);
             status32.daemon_error_info = NULL;
           }
           
           status32.daemon_error_info = (char *)malloc(msg->length);
-          if (status32.daemon_error_info == NULL) {
+          if (!status32.daemon_error_info) {
             PLOGE("malloc daemon32 error info");
 
             break;
@@ -447,7 +447,7 @@ static bool ensure_daemon_created(bool is_64bit) {
                                                                                  \
     if (!status##abi.daemon_error_info) {                                        \
       status##abi.daemon_error_info = (char *)malloc(strlen(status_str) + 1);    \
-      if (status##abi.daemon_error_info) {                                       \
+      if (!status##abi.daemon_error_info) {                                      \
         LOGE("malloc daemon" #abi " error info failed");                         \
                                                                                  \
         return;                                                                  \
@@ -800,10 +800,10 @@ void init_monitor() {
   looper.RegisterHandler(ptraceHandler, EPOLLIN | EPOLLET);
   looper.Loop();
 
-  if (status64.daemon_info != NULL) free(status64.daemon_info);
-  if (status64.daemon_error_info != NULL) free(status64.daemon_error_info);
-  if (status32.daemon_info != NULL) free(status32.daemon_info);
-  if (status32.daemon_error_info != NULL) free(status32.daemon_error_info);
+  if (status64.daemon_info) free(status64.daemon_info);
+  if (status64.daemon_error_info) free(status64.daemon_error_info);
+  if (status32.daemon_info) free(status32.daemon_info);
+  if (status32.daemon_error_info) free(status32.daemon_error_info);
 
   LOGI("exit");
 }
