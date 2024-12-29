@@ -31,6 +31,7 @@ char *magisk_managers[] = {
 enum magisk_variants variant = Official;
 /* INFO: Longest path */
 static char path_to_magisk[sizeof(DEBUG_RAMDISK_MAGISK)];
+bool is_using_sulist = false;
 
 void magisk_get_existence(struct root_impl_state *state) {
   struct stat s;
@@ -78,7 +79,7 @@ void magisk_get_existence(struct root_impl_state *state) {
     strcpy(path_to_magisk, SBIN_MAGISK);
   }
 
-  char *argv[] = { "magisk", "-v", NULL };
+  char *argv[4] = { "magisk", "-v", NULL, NULL };
 
   char magisk_info[128];
   if (!exec_command(magisk_info, sizeof(magisk_info), (const char *)path_to_magisk, argv)) {
@@ -112,6 +113,27 @@ void magisk_get_existence(struct root_impl_state *state) {
 
     return;
   }
+
+  /* INFO: Magisk Kitsune has a feature called SuList, which is a whitelist of
+             which processes are allowed to see root. Although only Kitsune has
+             this option, there are Kitsune forks without "-kitsune" suffix, so
+             to avoid excluding them from taking advantage of that feature, we
+             will not check the variant.
+  */
+  argv[1] = "--sqlite";
+  argv[2] = "select value from settings where key = 'sulist' limit 1";
+
+  char sulist_enabled[32];
+  if (!exec_command(sulist_enabled, sizeof(sulist_enabled), (const char *)path_to_magisk, argv)) {
+    LOGE("Failed to execute magisk binary: %s\n", strerror(errno));
+    errno = 0;
+
+    state->state = Abnormal;
+
+    return;
+  }
+
+  is_using_sulist = strcmp(sulist_enabled, "value=1") == 0;
 
   if (atoi(magisk_version) >= MIN_MAGISK_VERSION) state->state = Supported;
   else state->state = TooOld;
@@ -158,7 +180,10 @@ bool magisk_uid_should_umount(uid_t uid) {
   char *package_name = strtok(result + strlen("package:"), " ");
 
   char sqlite_cmd[256];
-  snprintf(sqlite_cmd, sizeof(sqlite_cmd), "select 1 from denylist where package_name=\"%s\" limit 1", package_name);
+  if (is_using_sulist)
+    snprintf(sqlite_cmd, sizeof(sqlite_cmd), "select 1 from sulist where package_name=\"%s\" limit 1", package_name);
+  else
+    snprintf(sqlite_cmd, sizeof(sqlite_cmd), "select 1 from denylist where package_name=\"%s\" limit 1", package_name);
 
   char *const argv[] = { "magisk", "--sqlite", sqlite_cmd, NULL };
 
@@ -169,7 +194,8 @@ bool magisk_uid_should_umount(uid_t uid) {
     return false;
   }
 
-  return result[0] != '\0';
+  if (is_using_sulist) return result[0] == '\0';
+  else return result[0] != '\0';
 }
 
 bool magisk_uid_is_manager(uid_t uid) {
