@@ -28,7 +28,7 @@ val commitHash: String by rootProject.extra
 
 val CStandardFlags = arrayOf(
   "-D_GNU_SOURCE", "-std=c99", "-Wpedantic", "-Wall", "-Wextra", "-Werror",
-  "-Wformat", "-Wuninitialized", "-Wshadow", "-Wno-zero-length-array", 
+  "-Wformat", "-Wuninitialized", "-Wshadow", "-Wno-zero-length-array",
   "-Wconversion", "-Wno-fixed-enum-extension", "-Iroot_impl", "-llog",
   "-DMIN_APATCH_VERSION=$minAPatchVersion",
   "-DMIN_KSU_VERSION=$minKsuVersion",
@@ -65,10 +65,20 @@ task("buildAndStrip") {
   doLast {
     val ndkPath = getLatestNDKPath()
 
-    val aarch64Compiler = Paths.get(ndkPath, "toolchains", "llvm", "prebuilt", "linux-x86_64", "bin", "aarch64-linux-android34-clang").toString()
-    val armv7aCompiler = Paths.get(ndkPath, "toolchains", "llvm", "prebuilt", "linux-x86_64", "bin", "armv7a-linux-androideabi34-clang").toString()
-    val x86Compiler = Paths.get(ndkPath, "toolchains", "llvm", "prebuilt", "linux-x86_64", "bin", "i686-linux-android34-clang").toString()
-    val x86_64Compiler = Paths.get(ndkPath, "toolchains", "llvm", "prebuilt", "linux-x86_64", "bin", "x86_64-linux-android34-clang").toString()
+    val osName = ProcessBuilder("sh", "-c", "uname | tr A-Z a-z")
+      .redirectOutput(ProcessBuilder.Redirect.PIPE)
+      .start()
+      .inputStream.bufferedReader().readText().trim()
+    val machine = ProcessBuilder("uname", "-m")
+      .redirectOutput(ProcessBuilder.Redirect.PIPE)
+      .start()
+      .inputStream.bufferedReader().readText().trim()
+    val hostPlatform = "$osName-$machine"
+
+    val aarch64Compiler = Paths.get(ndkPath, "toolchains", "llvm", "prebuilt", hostPlatform, "bin", "aarch64-linux-android34-clang").toString()
+    val armv7aCompiler = Paths.get(ndkPath, "toolchains", "llvm", "prebuilt", hostPlatform, "bin", "armv7a-linux-androideabi34-clang").toString()
+    val x86Compiler = Paths.get(ndkPath, "toolchains", "llvm", "prebuilt", hostPlatform, "bin", "i686-linux-android34-clang").toString()
+    val x86_64Compiler = Paths.get(ndkPath, "toolchains", "llvm", "prebuilt", hostPlatform, "bin", "x86_64-linux-android34-clang").toString()
 
     if (!Paths.get(aarch64Compiler).toFile().exists()) {
       throw Exception("aarch64 compiler not found at $aarch64Compiler")
