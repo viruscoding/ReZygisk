@@ -181,8 +181,6 @@ DCL_HOOK_FUNC(int, unshare, int flags) {
             update_mnt_ns(Rooted, false);
         } else if (!(g_ctx->flags[DO_REVERT_UNMOUNT])) {
             update_mnt_ns(Module, false);
-        } else {
-            LOGI("Process [%s] is on denylist, skipping unmount", g_ctx->process);
         }
 
         old_unshare(CLONE_NEWNS);
@@ -636,6 +634,7 @@ void ZygiskContext::run_modules_pre() {
 
   for (auto &m : modules) {
     m.onLoad(env);
+
     if (flags[APP_SPECIALIZE]) m.preAppSpecialize(args.app);
     else if (flags[SERVER_FORK_AND_SPECIALIZE]) m.preServerSpecialize(args.server);
   }
@@ -674,6 +673,12 @@ void ZygiskContext::app_specialize_pre() {
     if ((info_flags & (PROCESS_IS_MANAGER | PROCESS_ROOT_IS_MAGISK)) == (PROCESS_IS_MANAGER | PROCESS_ROOT_IS_MAGISK)) {
         LOGD("Manager process detected. Notifying that Zygisk has been enabled.");
 
+        /* INFO: This environment variable is related to Magisk Zygisk/Manager. It
+                   it used by Magisk's Zygisk to communicate to Magisk Manager whether
+                   Zygisk is working or not.
+
+                 To allow Zygisk modules to both work properly and for the manager to
+                   identify Zygisk, being it not built-in, as working, we also set it. */
         setenv("ZYGISK_ENABLED", "1", 1);
     } else {
         run_modules_pre();
@@ -818,7 +823,7 @@ void clean_trace(const char* path, size_t load, size_t unload, bool spoof_maps) 
 
     if (load > 0 || unload > 0) solist_reset_counters(load, unload);
 
-    LOGI("Dropping solist record for %s", path);
+    LOGD("Dropping solist record for %s", path);
 
     bool path_found = solist_drop_so_path(path);
     if (!path_found || !spoof_maps) return;

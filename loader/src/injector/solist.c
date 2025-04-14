@@ -1,5 +1,3 @@
-/* INFO: This file is written in C99 */
-
 #include <stdio.h>
 #include <stdbool.h>
 #include <string.h>

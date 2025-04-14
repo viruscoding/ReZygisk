@@ -1,8 +1,11 @@
 #ifndef DAEMON_H
 #define DAEMON_H
+
 #ifdef __cplusplus
 extern "C" {
 #endif /* __cplusplus */
+
+#include <stdbool.h>
 
 #include <unistd.h>
 
@@ -51,9 +54,11 @@ enum mount_namespace_state {
   Module
 };
 
-void rezygiskd_init(const char *path);
+#define TMP_PATH "/data/adb/rezygisk"
 
-void rezygiskd_get_path(char *buf, size_t buf_size);
+static inline const char *rezygiskd_get_path() {
+  return TMP_PATH;
+}
 
 int rezygiskd_connect(uint8_t retry);
 

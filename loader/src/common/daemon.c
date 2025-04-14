@@ -1,8 +1,3 @@
-// #include <unistd.h>
-// #include <sys/types.h>
-// #include <sys/stat.h>
-// #include <dirent.h>
-// #include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdbool.h>
@@ -14,19 +9,6 @@
 #include "socket_utils.h"
 
 #include "daemon.h"
-
-char daemon_path[PATH_MAX];
-
-void rezygiskd_init(const char *path) {
-  snprintf(daemon_path, sizeof(daemon_path), "%s/%s", path, SOCKET_FILE_NAME);
-}
-
-void rezygiskd_get_path(char *buf, size_t buf_size) {
-  size_t fileless_daemon_path = strlen(daemon_path) - strlen("/") - strlen(SOCKET_FILE_NAME);
-
-  strncpy(buf, daemon_path, buf_size > fileless_daemon_path ? fileless_daemon_path : buf_size);
-  buf[fileless_daemon_path] = '\0';
-}
 
 int rezygiskd_connect(uint8_t retry) {
   retry++;
@@ -49,7 +31,7 @@ int rezygiskd_connect(uint8_t retry) {
     Sources:
      - https://pubs.opengroup.org/onlinepubs/009696699/basedefs/sys/un.h.html
   */
-  strcpy(addr.sun_path, daemon_path);
+  strcpy(addr.sun_path, TMP_PATH "/" SOCKET_FILE_NAME);
   socklen_t socklen = sizeof(addr);
 
   while (--retry) {
@@ -343,15 +325,18 @@ bool rezygiskd_update_mns(enum mount_namespace_state nms_state, char *buf, size_
   write_uint8_t(fd, (uint8_t)nms_state);
 
   uint32_t target_pid = 0;
-  read_uint32_t(fd, &target_pid);
-  if (target_pid == 0) {
+  if (read_uint32_t(fd, &target_pid) < 0) {
+    PLOGE("Failed to read target pid");
+
     close(fd);
 
     return false;
   }
 
-  int target_fd = read_fd(fd);
-  if (target_fd == -1) {
+  uint32_t target_fd = 0;
+  if (read_uint32_t(fd, &target_fd) < 0) {
+    PLOGE("Failed to read target fd");
+
     close(fd);
 
     return false;

@@ -1,20 +1,18 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <inttypes.h>
+
 #include <sys/ptrace.h>
-#include <unistd.h>
-#include <sys/uio.h>
 #include <sys/auxv.h>
 #include <elf.h>
 #include <link.h>
-#include <vector>
-#include <string>
-#include <sys/mman.h>
 #include <sys/wait.h>
 #include <dlfcn.h>
 #include <signal.h>
-#include <sys/system_properties.h>
-#include <string>
-#include <cinttypes>
 
-#include "utils.hpp"
+#include <unistd.h>
+
+#include "utils.h"
 
 bool inject_on_main(int pid, const char *lib_path) {
   LOGI("injecting %s to zygote %d", lib_path, pid);
@@ -25,16 +23,26 @@ bool inject_on_main(int pid, const char *lib_path) {
     https://cs.android.com/android/platform/superproject/main/+/main:bionic/libc/private/KernelArgumentBlock.h;l=30;drc=6d1ee77ee32220e4202c3066f7e1f69572967ad8
   */
 
-  struct user_regs_struct regs {},
-                          backup {};
+  struct user_regs_struct regs = { 0 };
 
-  /* WARNING: C++ keyword */
-  std::vector<MapInfo> map = MapInfo::Scan(std::to_string(pid));
-  if (!get_regs(pid, regs)) return false;
+  char pid_maps[PATH_MAX];
+  snprintf(pid_maps, sizeof(pid_maps), "/proc/%d/maps", pid);
+
+  struct maps *map = parse_maps(pid_maps);
+  if (map == NULL) {
+    LOGE("failed to parse remote maps");
+
+    return false;
+  }
+
+  if (!get_regs(pid, &regs)) return false;
 
   uintptr_t arg = (uintptr_t)regs.REG_SP;
 
-  LOGV("kernel argument %" PRIxPTR " %s", arg, get_addr_mem_region(map, arg).c_str());
+  char addr_mem_region[1024];
+  get_addr_mem_region(map, arg, addr_mem_region, sizeof(addr_mem_region));
+
+  LOGV("kernel argument %" PRIxPTR " %s", arg, addr_mem_region);
 
   int argc;
   char **argv = (char **)((uintptr_t *)arg + 1);
@@ -43,18 +51,16 @@ bool inject_on_main(int pid, const char *lib_path) {
   read_proc(pid, arg, &argc, sizeof(argc));
   LOGV("argc %d", argc);
 
-  /* WARNING: C++ keyword */
-  auto envp = argv + argc + 1;
+  char **envp = argv + argc + 1;
   LOGV("envp %p", (void *)envp);
 
-  /* WARNING: C++ keyword */
-  auto p = envp;
+  char **p = envp;
   while (1) {
     uintptr_t *buf;
     read_proc(pid, (uintptr_t)p, &buf, sizeof(buf));
 
     if (buf == NULL) break;
-    
+
     /* TODO: Why ++p? */
     p++;
   }
@@ -63,7 +69,9 @@ bool inject_on_main(int pid, const char *lib_path) {
   p++;
 
   ElfW(auxv_t) *auxv = (ElfW(auxv_t) *)p;
-  LOGV("auxv %p %s", auxv, get_addr_mem_region(map, (uintptr_t) auxv).c_str());
+
+  get_addr_mem_region(map, (uintptr_t)auxv, addr_mem_region, sizeof(addr_mem_region));
+  LOGV("auxv %p %s", auxv, addr_mem_region);
 
   ElfW(auxv_t) *v = auxv;
   uintptr_t entry_addr = 0;
@@ -78,8 +86,9 @@ bool inject_on_main(int pid, const char *lib_path) {
       entry_addr = (uintptr_t)buf.a_un.a_val;
       addr_of_entry_addr = (uintptr_t)v + offsetof(ElfW(auxv_t), a_un);
 
+      get_addr_mem_region(map, entry_addr, addr_mem_region, sizeof(addr_mem_region));
       LOGV("entry address %" PRIxPTR " %s (entry=%" PRIxPTR ", entry_addr=%" PRIxPTR ")", entry_addr,
-            get_addr_mem_region(map, entry_addr).c_str(), (uintptr_t)v, addr_of_entry_addr);
+            addr_mem_region, (uintptr_t)v, addr_of_entry_addr);
 
       break;
     }
@@ -113,7 +122,7 @@ bool inject_on_main(int pid, const char *lib_path) {
   int status;
   wait_for_trace(pid, &status, __WALL);
   if (WIFSTOPPED(status) && WSTOPSIG(status) == SIGSEGV) {
-    if (!get_regs(pid, regs)) return false;
+    if (!get_regs(pid, &regs)) return false;
 
     if (((int)regs.REG_IP & ~1) != ((int)break_addr & ~1)) {
       LOGE("stopped at unknown addr %p", (void *) regs.REG_IP);
@@ -128,13 +137,25 @@ bool inject_on_main(int pid, const char *lib_path) {
     if (!write_proc(pid, (uintptr_t) addr_of_entry_addr, &entry_addr, sizeof(entry_addr))) return false;
 
     /* backup registers */
+    struct user_regs_struct backup;
     memcpy(&backup, &regs, sizeof(regs));
 
-    /* WARNING: C++ keyword */
-    map = MapInfo::Scan(std::to_string(pid));
+    free_maps(map);
 
-    /* WARNING: C++ keyword */
-    std::vector<MapInfo> local_map = MapInfo::Scan();
+    map = parse_maps(pid_maps);
+    if (!map) {
+      LOGE("failed to parse remote maps");
+
+      return false;
+    }
+
+    struct maps *local_map = parse_maps("/proc/self/maps");
+    if (!local_map) {
+      LOGE("failed to parse local maps");
+
+      return false;
+    }
+
     void *libc_return_addr = find_module_return_addr(map, "libc.so");
     LOGD("libc return addr %p", libc_return_addr);
 
@@ -142,17 +163,19 @@ bool inject_on_main(int pid, const char *lib_path) {
     void *dlopen_addr = find_func_addr(local_map, map, "libdl.so", "dlopen");
     if (dlopen_addr == NULL) return false;
 
-    /* WARNING: C++ keyword */
-    std::vector<long> args;
+    long *args = (long *)malloc(3 * sizeof(long));
+    if (args == NULL) {
+      LOGE("malloc args");
 
-    /* WARNING: C++ keyword */
-    uintptr_t str = push_string(pid, regs, lib_path);
+      return false;
+    }
 
-    args.clear();
-    args.push_back((long) str);
-    args.push_back((long) RTLD_NOW);
+    uintptr_t str = push_string(pid, &regs, lib_path);
 
-    uintptr_t remote_handle = remote_call(pid, regs, (uintptr_t)dlopen_addr, (uintptr_t)libc_return_addr, args);
+    args[0] = (long) str;
+    args[1] = (long) RTLD_NOW;
+
+    uintptr_t remote_handle = remote_call(pid, &regs, (uintptr_t)dlopen_addr, (uintptr_t)libc_return_addr, args, 2);
     LOGD("remote handle %p", (void *)remote_handle);
     if (remote_handle == 0) {
       LOGE("handle is null");
@@ -162,36 +185,46 @@ bool inject_on_main(int pid, const char *lib_path) {
       if (dlerror_addr == NULL) {
         LOGE("find dlerror");
 
+        free(args);
+
         return false;
       }
 
-      args.clear();
+      uintptr_t dlerror_str_addr = remote_call(pid, &regs, (uintptr_t)dlerror_addr, (uintptr_t)libc_return_addr, args, 0);
+      LOGD("dlerror str %p", (void *)dlerror_str_addr);
+      if (dlerror_str_addr == 0) {
+        LOGE("dlerror str is null");
 
-      uintptr_t dlerror_str_addr = remote_call(pid, regs, (uintptr_t)dlerror_addr, (uintptr_t)libc_return_addr, args);
-      LOGD("dlerror str %p", (void*) dlerror_str_addr);
-      if (dlerror_str_addr == 0) return false;
+        free(args);
+
+        return false;
+      }
 
       void *strlen_addr = find_func_addr(local_map, map, "libc.so", "strlen");
       if (strlen_addr == NULL) {
         LOGE("find strlen");
 
+        free(args);
+
         return false;
       }
 
-      args.clear();
-      args.push_back(dlerror_str_addr);
+      args[0] = (long) dlerror_str_addr;
 
-      uintptr_t dlerror_len = remote_call(pid, regs, (uintptr_t)strlen_addr, (uintptr_t)libc_return_addr, args);
+      uintptr_t dlerror_len = remote_call(pid, &regs, (uintptr_t)strlen_addr, (uintptr_t)libc_return_addr, args, 1);
       if (dlerror_len <= 0) {
         LOGE("dlerror len <= 0");
 
+        free(args);
+
         return false;
       }
 
-      /* NOTICE: C++ -> C */
       char *err = (char *)malloc((dlerror_len + 1) * sizeof(char));
       if (err == NULL) {
         LOGE("malloc err");
+
+        free(args);
 
         return false;
       }
@@ -201,6 +234,7 @@ bool inject_on_main(int pid, const char *lib_path) {
       LOGE("dlerror info %s", err);
 
       free(err);
+      free(args);
 
       return false;
     }
@@ -209,12 +243,13 @@ bool inject_on_main(int pid, const char *lib_path) {
     void *dlsym_addr = find_func_addr(local_map, map, "libdl.so", "dlsym");
     if (dlsym_addr == NULL) return false;
 
-    args.clear();
-    str = push_string(pid, regs, "entry");
-    args.push_back(remote_handle);
-    args.push_back((long) str);
+    free_maps(local_map);
 
-    uintptr_t injector_entry = remote_call(pid, regs, (uintptr_t)dlsym_addr, (uintptr_t)libc_return_addr, args);
+    str = push_string(pid, &regs, "entry");
+    args[0] = remote_handle;
+    args[1] = (long) str;
+
+    uintptr_t injector_entry = remote_call(pid, &regs, (uintptr_t)dlsym_addr, (uintptr_t)libc_return_addr, args, 2);
     LOGD("injector entry %p", (void *)injector_entry);
     if (injector_entry == 0) {
       LOGE("injector entry is null");
@@ -223,38 +258,41 @@ bool inject_on_main(int pid, const char *lib_path) {
     }
 
     /* record the address range of libzygisk.so */
-    map = MapInfo::Scan(std::to_string(pid));
-    void *start_addr = nullptr;
+    map = parse_maps(pid_maps);
+
+    void *start_addr = NULL;
     size_t block_size = 0;
-    for (auto &info : map) {
-        if (strstr(info.path.c_str(), "libzygisk.so")) {
-            void *addr = (void *)info.start;
-            if (start_addr == nullptr) start_addr = addr;
-            size_t size = info.end - info.start;
-            block_size += size;
-            LOGD("found block %s: [%p-%p] with size %zu", info.path.c_str(), addr, (void *)info.end, size);
-        }
+
+    for (size_t i = 0; i < map->size; i++) {
+      if (!strstr(map->maps[i].path, "libzygisk.so")) continue;
+
+      if (start_addr == NULL) start_addr = (void *)map->maps[i].start;
+
+      size_t size = map->maps[i].end - map->maps[i].start;
+      block_size += size;
+
+      LOGD("found block %s: [%p-%p] with size %zu", map->maps[i].path, (void *)map->maps[i].start,
+            (void *)map->maps[i].end, size);
     }
 
+    free_maps(map);
+
     /* call injector entry(start_addr, block_size, path) */
-    args.clear();
-    args.push_back((uintptr_t) start_addr);
-    args.push_back(block_size);
+    args[0] = (uintptr_t)start_addr;
+    args[1] = block_size;
+    str = push_string(pid, &regs, rezygiskd_get_path());
+    args[2] = (uintptr_t)str;
 
-    char tmp_path[PATH_MAX];
-    rezygiskd_get_path(tmp_path, sizeof(tmp_path));
+    remote_call(pid, &regs, injector_entry, (uintptr_t)libc_return_addr, args, 3);
 
-    str = push_string(pid, regs, tmp_path);
-    args.push_back((long) str);
-
-    remote_call(pid, regs, injector_entry, (uintptr_t)libc_return_addr, args);
+    free(args);
 
     /* reset pc to entry */
     backup.REG_IP = (long) entry_addr;
     LOGD("invoke entry");
 
     /* restore registers */
-    if (!set_regs(pid, backup)) return false;
+    if (!set_regs(pid, &backup)) return false;
 
     return true;
   } else {
@@ -290,11 +328,8 @@ bool trace_zygote(int pid) {
   WAIT_OR_DIE
 
   if (STOPPED_WITH(SIGSTOP, PTRACE_EVENT_STOP)) {
-    /* WARNING: C++ keyword */
     char lib_path[PATH_MAX];
-    rezygiskd_get_path(lib_path, sizeof(lib_path));
-
-    strcat(lib_path,"/lib" LP_SELECT("", "64") "/libzygisk.so");
+    snprintf(lib_path, sizeof(lib_path), "%s/lib" LP_SELECT("", "64") "/libzygisk.so", rezygiskd_get_path());
 
     if (!inject_on_main(pid, lib_path)) {
       LOGE("failed to inject");

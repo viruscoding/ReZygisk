@@ -1,18 +1,21 @@
 #include <stdio.h>
+#include <stdlib.h>
+
+#ifdef __LP64__
+  #define LOG_TAG "zygisk-ptrace64"
+#else
+  #define LOG_TAG "zygisk-ptrace32"
+#endif
 
 #include "monitor.h"
-#include "utils.hpp"
+#include "utils.h"
 #include "daemon.h"
 
 int main(int argc, char **argv) {
-  rezygiskd_init("/data/adb/rezygisk");
-
   printf("The ReZygisk Tracer %s\n\n", ZKSU_VERSION);
 
   if (argc >= 2 && strcmp(argv[1], "monitor") == 0) {
     init_monitor();
-
-    printf("[ReZygisk]: Started monitoring...\n");
 
     return 0;
   } else if (argc >= 3 && strcmp(argv[1], "trace") == 0) {
@@ -25,11 +28,9 @@ int main(int argc, char **argv) {
         return 1;
       }
 
-      printf("[ReZygisk]: Tracing %ld...\n", pid);
-
       return 0;
   } else if (argc >= 2 && strcmp(argv[1], "ctl") == 0) {
-    enum Command command;
+    enum rezygiskd_command command;
 
     if (strcmp(argv[2], "start") == 0) command = START;
     else if (strcmp(argv[2], "stop") == 0) command = STOP;

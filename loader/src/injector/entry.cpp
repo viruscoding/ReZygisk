@@ -10,9 +10,9 @@ size_t block_size = 0;
 extern "C" [[gnu::visibility("default")]]
 void entry(void* addr, size_t size, const char* path) {
     LOGD("Zygisk library injected, version %s", ZKSU_VERSION);
+
     start_addr = addr;
     block_size = size;
-    rezygiskd_init(path);
 
     if (!rezygiskd_ping()) {
         LOGE("Zygisk daemon is not running");

@@ -58,34 +58,6 @@ static enum Architecture get_arch(void) {
   exit(1);
 }
 
-int create_library_fd(const char *restrict so_path) {
-  int so_fd = open(so_path, O_RDONLY);
-  if (so_fd == -1) {
-    LOGE("Failed opening so file: %s\n", strerror(errno));
-
-    return -1;
-  }
-
-  off_t so_size = lseek(so_fd, 0, SEEK_END);
-  if (so_size == -1) {
-    LOGE("Failed getting so file size: %s\n", strerror(errno));
-
-    close(so_fd);
-
-    return -1;
-  }
-
-  if (lseek(so_fd, 0, SEEK_SET) == -1) {
-    LOGE("Failed seeking so file: %s\n", strerror(errno));
-
-    close(so_fd);
-
-    return -1;
-  }
-
-  return so_fd;
-}
-
 /* WARNING: Dynamic memory based */
 static void load_modules(enum Architecture arch, struct Context *restrict context) {
   context->len = 0;
@@ -138,7 +110,7 @@ static void load_modules(enum Architecture arch, struct Context *restrict contex
       errno = 0;
     } else continue;
 
-    int lib_fd = create_library_fd(so_path);
+    int lib_fd = open(so_path, O_RDONLY | O_CLOEXEC);
     if (lib_fd == -1) {
       LOGE("Failed loading module `%s`\n", name);
 
@@ -553,12 +525,6 @@ void zygiskd_start(char *restrict argv[]) {
 
           if (write_string(client_fd, lib_path) == -1) {
             LOGE("Failed writing module path.\n");
-
-            break;
-          }
- 
-          if (write_string(client_fd, context.modules[i].name) == -1) {
-            LOGE("Failed writing module name.\n");
 
             break;
           }

@@ -26,6 +26,8 @@ val ccachePath by lazy {
 }
 
 val defaultCFlags = arrayOf(
+    "-D_GNU_SOURCE",
+
     "-Wall", "-Wextra",
     "-fno-rtti", "-fno-exceptions",
     "-fno-stack-protector", "-fomit-frame-pointer",
