@@ -5,6 +5,7 @@
 #include <list>
 #include <map>
 #include <array>
+#include <vector>
 
 #include <lsplt.hpp>
 
@@ -16,12 +17,12 @@
 #include <sys/mman.h>
 
 #include <unistd.h>
+#include <pthread.h>
 
 #include "daemon.h"
 #include "zygisk.hpp"
 #include "module.hpp"
-#include "files.hpp"
-#include "misc.hpp"
+#include "misc.h"
 
 #include "solist.h"
 
@@ -121,7 +122,7 @@ struct ZygiskContext {
 
 // Global variables
 vector<tuple<dev_t, ino_t, const char *, void **>> *plt_hook_list;
-map<string, vector<JNINativeMethod>, StringCmp> *jni_hook_list;
+map<string, vector<JNINativeMethod>> *jni_hook_list;
 bool should_unmap_zygisk = false;
 std::vector<lsplt::MapInfo> cached_map_infos = {};
 
@@ -139,8 +140,8 @@ DCL_HOOK_FUNC(int, fork) {
 }
 
 bool update_mnt_ns(enum mount_namespace_state mns_state, bool dry_run) {
-    std::string ns_path = zygiskd::UpdateMountNamespace(mns_state);
-    if (ns_path.empty()) {
+    char ns_path[PATH_MAX];
+    if (rezygiskd_update_mns(mns_state, ns_path, sizeof(ns_path)) == false) {
         PLOGE("Failed to update mount namespace");
 
         return false;
@@ -148,16 +149,16 @@ bool update_mnt_ns(enum mount_namespace_state mns_state, bool dry_run) {
 
     if (dry_run) return true;
 
-    int updated_ns = open(ns_path.data(), O_RDONLY);
+    int updated_ns = open(ns_path, O_RDONLY);
     if (updated_ns == -1) {
-        PLOGE("Failed to open mount namespace [%s]", ns_path.data());
+        PLOGE("Failed to open mount namespace [%s]", ns_path);
 
         return false;
     }
 
-    LOGD("set mount namespace to [%s] fd=[%d]\n", ns_path.data(), updated_ns);
+    LOGD("set mount namespace to [%s] fd=[%d]\n", ns_path, updated_ns);
     if (setns(updated_ns, CLONE_NEWNS) == -1) {
-        PLOGE("Failed to set mount namespace [%s]", ns_path.data());
+        PLOGE("Failed to set mount namespace [%s]", ns_path);
         close(updated_ns);
 
         return false;
@@ -180,6 +181,8 @@ DCL_HOOK_FUNC(int, unshare, int flags) {
             update_mnt_ns(Rooted, false);
         } else if (!(g_ctx->flags[DO_REVERT_UNMOUNT])) {
             update_mnt_ns(Module, false);
+        } else {
+            LOGI("Process [%s] is on denylist, skipping unmount", g_ctx->process);
         }
 
         old_unshare(CLONE_NEWNS);
@@ -389,8 +392,9 @@ void ZygiskContext::plt_hook_register(const char *regex, const char *symbol, voi
     regex_t re;
     if (regcomp(&re, regex, REG_NOSUB) != 0)
         return;
-    mutex_guard lock(hook_info_lock);
+    pthread_mutex_lock(&hook_info_lock);
     register_info.emplace_back(RegisterInfo{re, symbol, fn, backup});
+    pthread_mutex_unlock(&hook_info_lock);
 }
 
 void ZygiskContext::plt_hook_exclude(const char *regex, const char *symbol) {
@@ -398,8 +402,9 @@ void ZygiskContext::plt_hook_exclude(const char *regex, const char *symbol) {
     regex_t re;
     if (regcomp(&re, regex, REG_NOSUB) != 0)
         return;
-    mutex_guard lock(hook_info_lock);
+    pthread_mutex_lock(&hook_info_lock);
     ignore_info.emplace_back(IgnoreInfo{re, symbol ?: ""});
+    pthread_mutex_unlock(&hook_info_lock);
 }
 
 void ZygiskContext::plt_hook_process_regex() {
@@ -428,11 +433,13 @@ void ZygiskContext::plt_hook_process_regex() {
 
 bool ZygiskContext::plt_hook_commit() {
     {
-        mutex_guard lock(hook_info_lock);
+        pthread_mutex_lock(&hook_info_lock);
         plt_hook_process_regex();
         register_info.clear();
         ignore_info.clear();
+        pthread_mutex_unlock(&hook_info_lock);
     }
+
     return lsplt::CommitHook(cached_map_infos);
 }
 
@@ -454,12 +461,12 @@ bool ZygiskModule::valid() const {
 
 /* Zygisksu changed: Use own zygiskd */
 int ZygiskModule::connectCompanion() const {
-    return zygiskd::ConnectCompanion(id);
+    return rezygiskd_connect_companion(id);
 }
 
 /* Zygisksu changed: Use own zygiskd */
 int ZygiskModule::getModuleDir() const {
-    return zygiskd::GetModuleDir(id);
+    return rezygiskd_get_module_dir(id);
 }
 
 void ZygiskModule::setOption(zygisk::Option opt) {
@@ -596,21 +603,26 @@ void ZygiskContext::fork_post() {
 
 /* Zygisksu changed: Load module fds */
 void ZygiskContext::run_modules_pre() {
-  auto ms = zygiskd::ReadModules();
-  auto size = ms.size();
-  for (size_t i = 0; i < size; i++) {
-    auto &m = ms[i];
+  struct zygisk_modules ms;
+  if (rezygiskd_read_modules(&ms) == false) {
+    LOGE("Failed to read modules from zygiskd");
 
-    void *handle = dlopen(m.path.c_str(), RTLD_NOW);
+    return;
+  }
+
+  for (size_t i = 0; i < ms.modules_count; i++) {
+    char *lib_path = ms.modules[i];
+
+    void *handle = dlopen(lib_path, RTLD_NOW);
     if (!handle) {
-      LOGE("Failed to load module [%s]: %s", m.path.c_str(), dlerror());
+      LOGE("Failed to load module [%s]: %s", lib_path, dlerror());
 
       continue;
     }
 
     void *entry = dlsym(handle, "zygisk_module_entry");
     if (!entry) {
-      LOGE("Failed to find entry point in module [%s]: %s", m.path.c_str(), dlerror());
+      LOGE("Failed to find entry point in module [%s]: %s", lib_path, dlerror());
 
       dlclose(handle);
 
@@ -619,6 +631,8 @@ void ZygiskContext::run_modules_pre() {
 
     modules.emplace_back(i, handle, entry);
   }
+
+  free_modules(&ms);
 
   for (auto &m : modules) {
     m.onLoad(env);
@@ -648,7 +662,7 @@ void ZygiskContext::run_modules_post() {
 void ZygiskContext::app_specialize_pre() {
     flags[APP_SPECIALIZE] = true;
 
-    info_flags = zygiskd::GetProcessFlags(g_ctx->args.app->uid);
+    info_flags = rezygiskd_get_process_flags(g_ctx->args.app->uid);
      if (info_flags & PROCESS_IS_FIRST_STARTED) {
         update_mnt_ns(Clean, true);
     }
@@ -707,7 +721,7 @@ void ZygiskContext::nativeForkSystemServer_pre() {
     fork_pre();
     if (is_child()) {
         run_modules_pre();
-        zygiskd::SystemServerStarted();
+        rezygiskd_system_server_started();
     }
 
     sanitize_fds();
@@ -834,14 +848,11 @@ void clean_trace(const char* path, size_t load, size_t unload, bool spoof_maps) 
 }
 
 void hook_functions() {
-    default_new(plt_hook_list);
-    default_new(jni_hook_list);
+    plt_hook_list = new vector<tuple<dev_t, ino_t, const char *, void **>>();
+    jni_hook_list = new map<string, vector<JNINativeMethod>>();
 
     ino_t android_runtime_inode = 0;
     dev_t android_runtime_dev = 0;
-    /* TODO by ThePedroo: Implement injection via native bridge */
-    // ino_t native_bridge_inode = 0;
-    // dev_t native_bridge_dev = 0;
 
     cached_map_infos = lsplt::MapInfo::Scan();
     for (auto &map : cached_map_infos) {

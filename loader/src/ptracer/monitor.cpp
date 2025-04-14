@@ -14,8 +14,7 @@
 
 #include "monitor.h"
 #include "utils.hpp"
-#include "files.hpp"
-#include "misc.hpp"
+#include "misc.h"
 
 #define STOPPED_WITH(sig, event) WIFSTOPPED(status) && (status >> 8 == ((sig) | (event << 8)))
 
@@ -140,7 +139,10 @@ struct SocketHandler : public EventHandler {
       .sun_path = { 0 }
     };
 
-    size_t sun_path_len = sprintf(addr.sun_path, "%s/%s", zygiskd::GetTmpPath().c_str(), SOCKET_NAME);
+    char tmp_path[PATH_MAX];
+    rezygiskd_get_path(tmp_path, sizeof(tmp_path));
+
+    size_t sun_path_len = sprintf(addr.sun_path, "%s/%s", tmp_path, SOCKET_NAME);
 
     socklen_t socklen = sizeof(sa_family_t) + sun_path_len;
     if (bind(sock_fd_, (struct sockaddr *)&addr, socklen) == -1) {
@@ -747,7 +749,10 @@ static void updateStatus() {
 }
 
 static bool prepare_environment() {
-  strcat(prop_path, zygiskd::GetTmpPath().c_str());
+  char tmp_path[PATH_MAX];
+  rezygiskd_get_path(tmp_path, sizeof(tmp_path));
+
+  strcat(prop_path, tmp_path);
   strcat(prop_path, "/module.prop");
 
   close(open(prop_path, O_WRONLY | O_CREAT | O_TRUNC, 0644));
@@ -817,7 +822,11 @@ int send_control_command(enum Command cmd) {
     .sun_path = { 0 }
   };
 
-  size_t sun_path_len = snprintf(addr.sun_path, sizeof(addr.sun_path), "%s/%s", zygiskd::GetTmpPath().c_str(), SOCKET_NAME);
+  char tmp_path[PATH_MAX];
+  rezygiskd_get_path(tmp_path, sizeof(tmp_path));
+
+  size_t sun_path_len = snprintf(addr.sun_path, sizeof(addr.sun_path), "%s/%s", tmp_path, SOCKET_NAME);
+
   socklen_t socklen = sizeof(sa_family_t) + sun_path_len;
 
   ssize_t nsend = sendto(sockfd, (void *)&cmd, sizeof(cmd), 0, (sockaddr *)&addr, socklen);

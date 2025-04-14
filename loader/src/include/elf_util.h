@@ -6,8 +6,6 @@
 #include <linux/elf.h>
 #include <sys/types.h>
 
-#define restrict /* INFO: Temporary measure */
-
 #define SHT_GNU_HASH 0x6ffffff6
 
 struct symtabs {

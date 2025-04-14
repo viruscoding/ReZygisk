@@ -1,7 +1,6 @@
 #ifndef SOLIST_H
 #define SOLIST_H
 
-/* INFO: Temporary */
 #ifdef __cplusplus
 extern "C" {
 #endif /* __cplusplus */

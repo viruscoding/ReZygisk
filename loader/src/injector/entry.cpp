@@ -12,10 +12,11 @@ void entry(void* addr, size_t size, const char* path) {
     LOGD("Zygisk library injected, version %s", ZKSU_VERSION);
     start_addr = addr;
     block_size = size;
-    zygiskd::Init(path);
+    rezygiskd_init(path);
 
-    if (!zygiskd::PingHeartbeat()) {
+    if (!rezygiskd_ping()) {
         LOGE("Zygisk daemon is not running");
+
         return;
     }
 

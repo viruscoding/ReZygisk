@@ -240,7 +240,11 @@ bool inject_on_main(int pid, const char *lib_path) {
     args.clear();
     args.push_back((uintptr_t) start_addr);
     args.push_back(block_size);
-    str = push_string(pid, regs, zygiskd::GetTmpPath().c_str());
+
+    char tmp_path[PATH_MAX];
+    rezygiskd_get_path(tmp_path, sizeof(tmp_path));
+
+    str = push_string(pid, regs, tmp_path);
     args.push_back((long) str);
 
     remote_call(pid, regs, injector_entry, (uintptr_t)libc_return_addr, args);
@@ -287,10 +291,12 @@ bool trace_zygote(int pid) {
 
   if (STOPPED_WITH(SIGSTOP, PTRACE_EVENT_STOP)) {
     /* WARNING: C++ keyword */
-    std::string lib_path = zygiskd::GetTmpPath();
-    lib_path += "/lib" LP_SELECT("", "64") "/libzygisk.so";
+    char lib_path[PATH_MAX];
+    rezygiskd_get_path(lib_path, sizeof(lib_path));
 
-    if (!inject_on_main(pid, lib_path.c_str())) {
+    strcat(lib_path,"/lib" LP_SELECT("", "64") "/libzygisk.so");
+
+    if (!inject_on_main(pid, lib_path)) {
       LOGE("failed to inject");
 
       return false;
