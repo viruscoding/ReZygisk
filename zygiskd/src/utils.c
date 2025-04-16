@@ -358,7 +358,7 @@ bool exec_command(char *restrict buf, size_t len, const char *restrict file, cha
     dup2(link[1], STDOUT_FILENO);
     close(link[0]);
     close(link[1]);
-    
+
     execv(file, argv);
 
     LOGE("execv failed: %s\n", strerror(errno));
@@ -626,7 +626,7 @@ enum mns_umount_state unmount_root(bool modules_only, struct root_impl impl) {
       char source_name[LONGEST_ROOT_IMPL_NAME];
       if (impl.impl == KernelSU) strcpy(source_name, "KSU");
       else strcpy(source_name, "APatch");
-      
+
       const char **targets_to_unmount = NULL;
       size_t num_targets = 0;
 
@@ -639,6 +639,8 @@ enum mns_umount_state unmount_root(bool modules_only, struct root_impl impl) {
           if (strncmp(mount.target, "/debug_ramdisk", strlen("/debug_ramdisk")) == 0)
             should_unmount = true;
         } else {
+          if (strncmp(mount.target, "/system/", strlen("/system/")) == 0) continue;
+
           if (strcmp(mount.source, source_name) == 0) should_unmount = true;
           if (strncmp(mount.root, "/adb/modules", strlen("/adb/modules")) == 0) should_unmount = true;
           if (strncmp(mount.target, "/data/adb/modules", strlen("/data/adb/modules")) == 0) should_unmount = true;
@@ -675,7 +677,7 @@ enum mns_umount_state unmount_root(bool modules_only, struct root_impl impl) {
     }
     case Magisk: {
       LOGI("[Magisk] Unmounting root %s modules\n", modules_only ? "only" : "with");
-      
+
       const char **targets_to_unmount = NULL;
       size_t num_targets = 0;
 
@@ -683,27 +685,18 @@ enum mns_umount_state unmount_root(bool modules_only, struct root_impl impl) {
         struct mountinfo mount = mounts.mounts[i];
 
         bool should_unmount = false;
-        if (
-          (
-            modules_only && 
-            (
-              strcmp(mount.source, "magisk") == 0 ||
-              strncmp(mount.target, "/debug_ramdisk", strlen("/debug_ramdisk")) == 0 ||
-              strncmp(mount.target, "/system/bin", strlen("/system/bin")) == 0
-            )
-          ) ||
-          (
-            !modules_only && 
-            (
-              strcmp(mount.source, "magisk") == 0 ||
-              strncmp(mount.target, "/debug_ramdisk", strlen("/debug_ramdisk")) == 0 ||
-              strncmp(mount.target, "/data/adb/modules", strlen("/data/adb/modules")) == 0 ||
-              strncmp(mount.root, "/adb/modules", strlen("/adb/modules")) == 0 ||
-              strncmp(mount.target, "/system/bin", strlen("/system/bin")) == 0
-            )
-          )
-        ) {
-          should_unmount = true;
+        if (modules_only) {
+          if (strcmp(mount.source, "magisk") == 0) should_unmount = true;
+          if (strncmp(mount.target, "/debug_ramdisk", strlen("/debug_ramdisk")) == 0) should_unmount = true;
+          if (strncmp(mount.target, "/system/bin", strlen("/system/bin")) == 0) should_unmount = true;
+        } else {
+          if (strncmp(mount.target, "/system/", strlen("/system/")) == 0) continue;
+
+          if (strcmp(mount.source, "magisk") == 0) should_unmount = true;
+          if (strncmp(mount.target, "/debug_ramdisk", strlen("/debug_ramdisk")) == 0) should_unmount = true;
+          if (strncmp(mount.target, "/data/adb/modules", strlen("/data/adb/modules")) == 0) should_unmount = true;
+          if (strncmp(mount.root, "/adb/modules", strlen("/adb/modules")) == 0) should_unmount = true;
+          if (strncmp(mount.target, "/system/bin", strlen("/system/bin")) == 0) should_unmount = true;
         }
 
         if (!should_unmount) continue;
