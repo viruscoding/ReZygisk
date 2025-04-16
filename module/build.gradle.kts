@@ -53,7 +53,7 @@ androidComponents.onVariants { variant ->
         into(moduleDir)
         from("${rootProject.projectDir}/README.md")
         from("$projectDir/src") {
-            exclude("module.prop", "customize.sh", "post-fs-data.sh", "service.sh", "uninstall.sh", "mazoku")
+            exclude("module.prop", "customize.sh", "post-fs-data.sh", "service.sh", "uninstall.sh")
             filter<FixCrLfFilter>("eol" to FixCrLfFilter.CrLf.newInstance("lf"))
         }
         from("$projectDir/src") {
@@ -65,7 +65,6 @@ androidComponents.onVariants { variant ->
                 "versionCode" to verCode
             )
         }
-        from("$projectDir/src/mazoku")
         from("$projectDir/src") {
             include("customize.sh", "post-fs-data.sh", "service.sh", "uninstall.sh")
             val tokens = mapOf(
@@ -122,7 +121,6 @@ androidComponents.onVariants { variant ->
                     set.add(Pair(root.file("sepolicy.rule").asFile, null))
                     set.add(Pair(root.file("post-fs-data.sh").asFile, null))
                     set.add(Pair(root.file("service.sh").asFile, null))
-                    set.add(Pair(root.file("mazoku").asFile, null))
                     set.add(
                         Pair(
                             root.file("lib/libzygisk.so").asFile,
