@@ -104,7 +104,6 @@ extract "$ZIPFILE" 'module.prop'     "$MODPATH"
 extract "$ZIPFILE" 'post-fs-data.sh' "$MODPATH"
 extract "$ZIPFILE" 'service.sh'      "$MODPATH"
 extract "$ZIPFILE" 'uninstall.sh'    "$MODPATH"
-extract "$ZIPFILE" 'mazoku'          "$MODPATH"
 mv "$TMPDIR/sepolicy.rule" "$MODPATH"
 
 mkdir "$MODPATH/bin"
