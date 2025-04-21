@@ -663,11 +663,12 @@ void ZygiskContext::app_specialize_pre() {
 
     info_flags = rezygiskd_get_process_flags(g_ctx->args.app->uid);
      if (info_flags & PROCESS_IS_FIRST_STARTED) {
+        /* INFO: To ensure we are really using a clean mount namespace, we use
+                   the first process it as reference for clean mount namespace,
+                   before it even does something, so that it will be clean yet
+                   with expected mounts.
+        */
         update_mnt_ns(Clean, true);
-    }
-
-    if ((info_flags & PROCESS_ON_DENYLIST) == PROCESS_ON_DENYLIST) {
-        flags[DO_REVERT_UNMOUNT] = true;
     }
 
     if ((info_flags & (PROCESS_IS_MANAGER | PROCESS_ROOT_IS_MAGISK)) == (PROCESS_IS_MANAGER | PROCESS_ROOT_IS_MAGISK)) {
@@ -682,6 +683,18 @@ void ZygiskContext::app_specialize_pre() {
         setenv("ZYGISK_ENABLED", "1", 1);
     } else {
         run_modules_pre();
+
+        /* INFO: Modules only have two "start off" points from Zygisk, preSpecialize and
+                   postSpecialize. While preSpecialie in fact runs with Zygote (not superuser)
+                   privileges, in postSpecialize it will now be with lower permission, in
+                   the app's sandbox and therefore can move to a clean mount namespace after
+                   executing the modules preSpecialize.
+        */
+        if ((info_flags & PROCESS_ON_DENYLIST) == PROCESS_ON_DENYLIST) {
+            flags[DO_REVERT_UNMOUNT] = true;
+
+            update_mnt_ns(Clean, false);
+        }
     }
 }
 
@@ -745,12 +758,10 @@ void ZygiskContext::nativeForkAndSpecialize_pre() {
     LOGV("pre forkAndSpecialize [%s]", process);
     flags[APP_FORK_AND_SPECIALIZE] = true;
 
-    update_mnt_ns(Clean, false);
-
     fork_pre();
-    if (pid == 0) {
+    if (pid == 0)
         app_specialize_pre();
-    }
+
     sanitize_fds();
 }
 
