@@ -14,8 +14,8 @@
 
 #include <unistd.h>
 
-#include "daemon.h"
 #include "utils.h"
+#include "daemon.h"
 #include "misc.h"
 
 #include "monitor.h"

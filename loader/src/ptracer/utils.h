@@ -5,6 +5,12 @@
 
 #include "daemon.h"
 
+#ifdef __LP64__
+  #define LOG_TAG "zygisk-ptrace64"
+#else
+  #define LOG_TAG "zygisk-ptrace32"
+#endif
+
 #include "logging.h"
 
 struct map {

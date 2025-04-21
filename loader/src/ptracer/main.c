@@ -1,14 +1,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-#ifdef __LP64__
-  #define LOG_TAG "zygisk-ptrace64"
-#else
-  #define LOG_TAG "zygisk-ptrace32"
-#endif
-
-#include "monitor.h"
 #include "utils.h"
+#include "monitor.h"
 #include "daemon.h"
 
 int main(int argc, char **argv) {

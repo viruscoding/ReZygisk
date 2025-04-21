@@ -585,7 +585,7 @@ void ZygiskContext::sanitize_fds() {
     struct dirent *entry;
     while ((entry = readdir(dir))) {
         int fd = parse_int(entry->d_name);
-        if (fd == dfd || allowed_fds[fd] || fd < 0 || fd < MAX_FD_SIZE) continue;
+        if (fd < 0 || fd < MAX_FD_SIZE || fd == dfd || allowed_fds[fd]) continue;
 
         close(fd);
     }

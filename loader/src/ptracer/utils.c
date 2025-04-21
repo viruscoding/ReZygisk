@@ -19,9 +19,10 @@
 #include <unistd.h>
 #include <linux/limits.h>
 
-#include "logging.h"
-
 #include "utils.h"
+
+/* INFO: utils.h must be before logging.h so that it defined LOG_TAG first */
+#include "logging.h"
 
 bool switch_mnt_ns(int pid, int *fd) {
   int nsfd, old_nsfd = -1;
@@ -88,6 +89,10 @@ struct maps *parse_maps(const char *filename) {
 
     return NULL;
   }
+
+  /* INFO: To ensure in the realloc the libc will know it is meant
+             to allocate, and not reallocate from a garbage address. */
+  maps->maps = NULL;
 
   char line[4096 * 2];
   size_t i = 0;
