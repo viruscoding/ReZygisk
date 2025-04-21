@@ -629,18 +629,18 @@ void zygiskd_start(char *restrict argv[]) {
 
         break;
       }
-      case GetCleanNamespace: {
+      case UpdateMountNamespace: {
         pid_t pid = 0;
         ssize_t ret = read_uint32_t(client_fd, (uint32_t *)&pid);
-        ASSURE_SIZE_READ_BREAK("GetCleanNamespace", "pid", ret, sizeof(pid));
+        ASSURE_SIZE_READ_BREAK("UpdateMountNamespace", "pid", ret, sizeof(pid));
 
         uint8_t mns_state = 0;
         ret = read_uint8_t(client_fd, &mns_state);
-        ASSURE_SIZE_READ_BREAK("GetCleanNamespace", "mns_state", ret, sizeof(mns_state));
+        ASSURE_SIZE_READ_BREAK("UpdateMountNamespace", "mns_state", ret, sizeof(mns_state));
 
         uint32_t our_pid = (uint32_t)getpid();
         ret = write_uint32_t(client_fd, (uint32_t)our_pid);
-        ASSURE_SIZE_WRITE_BREAK("GetCleanNamespace", "our_pid", ret, sizeof(our_pid));
+        ASSURE_SIZE_WRITE_BREAK("UpdateMountNamespace", "our_pid", ret, sizeof(our_pid));
 
         if ((enum MountNamespaceState)mns_state == Clean) {
           save_mns_fd(pid, Rooted, impl);
@@ -649,7 +649,7 @@ void zygiskd_start(char *restrict argv[]) {
 
         uint32_t clean_namespace_fd = (uint32_t)save_mns_fd(pid, (enum MountNamespaceState)mns_state, impl);
         ret = write_uint32_t(client_fd, clean_namespace_fd);
-        ASSURE_SIZE_WRITE_BREAK("GetCleanNamespace", "clean_namespace_fd", ret, sizeof(clean_namespace_fd));
+        ASSURE_SIZE_WRITE_BREAK("UpdateMountNamespace", "clean_namespace_fd", ret, sizeof(clean_namespace_fd));
 
         break;
       }
