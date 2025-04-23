@@ -639,7 +639,11 @@ enum mns_umount_state unmount_root(bool modules_only, struct root_impl impl) {
           if (strncmp(mount.target, "/debug_ramdisk", strlen("/debug_ramdisk")) == 0)
             should_unmount = true;
         } else {
-          if (strncmp(mount.target, "/system/", strlen("/system/")) == 0) continue;
+          /* INFO: KernelSU has its own /system mounts, so we only skip the mount
+                     if they are from a module, not KSU itself.
+          */
+          if (strncmp(mount.target, "/system/", strlen("/system/")) == 0 && 
+              strncmp(mount.root, "/adb/modules", strlen("/adb/modules")) == 0) continue;
 
           if (strcmp(mount.source, source_name) == 0) should_unmount = true;
           if (strncmp(mount.root, "/adb/modules", strlen("/adb/modules")) == 0) should_unmount = true;
