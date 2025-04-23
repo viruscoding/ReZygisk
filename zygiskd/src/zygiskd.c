@@ -58,34 +58,6 @@ static enum Architecture get_arch(void) {
   exit(1);
 }
 
-int create_library_fd(const char *restrict so_path) {
-  int so_fd = open(so_path, O_RDONLY);
-  if (so_fd == -1) {
-    LOGE("Failed opening so file: %s\n", strerror(errno));
-
-    return -1;
-  }
-
-  off_t so_size = lseek(so_fd, 0, SEEK_END);
-  if (so_size == -1) {
-    LOGE("Failed getting so file size: %s\n", strerror(errno));
-
-    close(so_fd);
-
-    return -1;
-  }
-
-  if (lseek(so_fd, 0, SEEK_SET) == -1) {
-    LOGE("Failed seeking so file: %s\n", strerror(errno));
-
-    close(so_fd);
-
-    return -1;
-  }
-
-  return so_fd;
-}
-
 /* WARNING: Dynamic memory based */
 static void load_modules(enum Architecture arch, struct Context *restrict context) {
   context->len = 0;
@@ -138,7 +110,7 @@ static void load_modules(enum Architecture arch, struct Context *restrict contex
       errno = 0;
     } else continue;
 
-    int lib_fd = create_library_fd(so_path);
+    int lib_fd = open(so_path, O_RDONLY | O_CLOEXEC);
     if (lib_fd == -1) {
       LOGE("Failed loading module `%s`\n", name);
 
@@ -556,12 +528,6 @@ void zygiskd_start(char *restrict argv[]) {
 
             break;
           }
- 
-          if (write_string(client_fd, context.modules[i].name) == -1) {
-            LOGE("Failed writing module name.\n");
-
-            break;
-          }
         }
 
         break;
@@ -663,18 +629,18 @@ void zygiskd_start(char *restrict argv[]) {
 
         break;
       }
-      case GetCleanNamespace: {
+      case UpdateMountNamespace: {
         pid_t pid = 0;
         ssize_t ret = read_uint32_t(client_fd, (uint32_t *)&pid);
-        ASSURE_SIZE_READ_BREAK("GetCleanNamespace", "pid", ret, sizeof(pid));
+        ASSURE_SIZE_READ_BREAK("UpdateMountNamespace", "pid", ret, sizeof(pid));
 
         uint8_t mns_state = 0;
         ret = read_uint8_t(client_fd, &mns_state);
-        ASSURE_SIZE_READ_BREAK("GetCleanNamespace", "mns_state", ret, sizeof(mns_state));
+        ASSURE_SIZE_READ_BREAK("UpdateMountNamespace", "mns_state", ret, sizeof(mns_state));
 
         uint32_t our_pid = (uint32_t)getpid();
         ret = write_uint32_t(client_fd, (uint32_t)our_pid);
-        ASSURE_SIZE_WRITE_BREAK("GetCleanNamespace", "our_pid", ret, sizeof(our_pid));
+        ASSURE_SIZE_WRITE_BREAK("UpdateMountNamespace", "our_pid", ret, sizeof(our_pid));
 
         if ((enum MountNamespaceState)mns_state == Clean) {
           save_mns_fd(pid, Rooted, impl);
@@ -683,7 +649,7 @@ void zygiskd_start(char *restrict argv[]) {
 
         uint32_t clean_namespace_fd = (uint32_t)save_mns_fd(pid, (enum MountNamespaceState)mns_state, impl);
         ret = write_uint32_t(client_fd, clean_namespace_fd);
-        ASSURE_SIZE_WRITE_BREAK("GetCleanNamespace", "clean_namespace_fd", ret, sizeof(clean_namespace_fd));
+        ASSURE_SIZE_WRITE_BREAK("UpdateMountNamespace", "clean_namespace_fd", ret, sizeof(clean_namespace_fd));
 
         break;
       }

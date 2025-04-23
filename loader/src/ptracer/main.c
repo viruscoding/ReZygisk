@@ -1,22 +1,19 @@
 #include <stdio.h>
+#include <stdlib.h>
 
+#include "utils.h"
 #include "monitor.h"
-#include "utils.hpp"
 #include "daemon.h"
 
 int main(int argc, char **argv) {
-  zygiskd::Init("/data/adb/rezygisk");
-
   printf("The ReZygisk Tracer %s\n\n", ZKSU_VERSION);
 
   if (argc >= 2 && strcmp(argv[1], "monitor") == 0) {
     init_monitor();
 
-    printf("[ReZygisk]: Started monitoring...\n");
-
     return 0;
   } else if (argc >= 3 && strcmp(argv[1], "trace") == 0) {
-      if (argc >= 4 && strcmp(argv[3], "--restart") == 0) zygiskd::ZygoteRestart();
+      if (argc >= 4 && strcmp(argv[3], "--restart") == 0) rezygiskd_zygote_restart();
 
       long pid = strtol(argv[2], 0, 0);
       if (!trace_zygote(pid)) {
@@ -25,11 +22,9 @@ int main(int argc, char **argv) {
         return 1;
       }
 
-      printf("[ReZygisk]: Tracing %ld...\n", pid);
-
       return 0;
   } else if (argc >= 2 && strcmp(argv[1], "ctl") == 0) {
-    enum Command command;
+    enum rezygiskd_command command;
 
     if (strcmp(argv[2], "start") == 0) command = START;
     else if (strcmp(argv[2], "stop") == 0) command = STOP;
@@ -54,28 +49,28 @@ int main(int argc, char **argv) {
 
     return 0;
   } else if (argc >= 2 && strcmp(argv[1], "info") == 0) {
-    struct zygote_info info;
-    zygiskd::GetInfo(&info);
+    struct rezygisk_info info;
+    rezygiskd_get_info(&info);
 
     printf("Daemon process PID: %d\n", info.pid);
 
     switch (info.root_impl) {
-      case ZYGOTE_ROOT_IMPL_NONE: {
+      case ROOT_IMPL_NONE: {
         printf("Root implementation: none\n");
 
         break;
       }
-      case ZYGOTE_ROOT_IMPL_APATCH: {
+      case ROOT_IMPL_APATCH: {
         printf("Root implementation: APatch\n");
-        
+
         break;
       }
-      case ZYGOTE_ROOT_IMPL_KERNELSU: {
+      case ROOT_IMPL_KERNELSU: {
         printf("Root implementation: KernelSU\n");
 
         break;
       }
-      case ZYGOTE_ROOT_IMPL_MAGISK: {
+      case ROOT_IMPL_MAGISK: {
         printf("Root implementation: Magisk\n");
 
         break;

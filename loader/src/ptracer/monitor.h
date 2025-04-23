@@ -1,5 +1,5 @@
-#ifndef MAIN_HPP
-#define MAIN_HPP
+#ifndef MONITOR_H
+#define MONITOR_H
 
 #include <stdbool.h>
 
@@ -7,7 +7,7 @@ void init_monitor();
 
 bool trace_zygote(int pid);
 
-enum Command {
+enum rezygiskd_command {
   START = 1,
   STOP = 2,
   EXIT = 3,
@@ -22,6 +22,6 @@ enum Command {
   SYSTEM_SERVER_STARTED = 10
 };
 
-int send_control_command(enum Command cmd);
+int send_control_command(enum rezygiskd_command cmd);
 
-#endif /* MAIN_HPP */
+#endif /* MONITOR_H */

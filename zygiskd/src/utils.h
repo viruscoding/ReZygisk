@@ -65,7 +65,7 @@
     return -1;                                                                                                   \
   }
 
-#define write_func_def(type)               \
+#define write_func_def(type)              \
   ssize_t write_## type(int fd, type val)
 
 #define read_func_def(type)               \

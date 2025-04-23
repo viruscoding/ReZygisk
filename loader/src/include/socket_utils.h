@@ -1,31 +1,25 @@
-#pragma once
+#ifndef SOCKET_UTILS_H
+#define SOCKET_UTILS_H
 
-#include <string>
-#include <string_view>
+#include <stdint.h>
 
-#include "logging.h"
+int read_fd(int fd);
+  
+char *read_string(int fd);
 
-namespace socket_utils {
+#define write_func_def(type)              \
+  ssize_t write_## type(int fd, type val)
 
-    ssize_t xread(int fd, void *buf, size_t count);
+#define read_func_def(type)               \
+  ssize_t read_## type(int fd, type *val)
 
-    size_t xwrite(int fd, const void *buf, size_t count);
+write_func_def(uint8_t);
+read_func_def(uint8_t);
 
-    uint8_t read_u8(int fd);
+write_func_def(uint32_t);
+read_func_def(uint32_t);
 
-    uint32_t read_u32(int fd);
+write_func_def(size_t);
+read_func_def(size_t);
 
-    size_t read_usize(int fd);
-
-    std::string read_string(int fd);
-
-    bool write_u8(int fd, uint8_t val);
-
-    bool write_u32(int fd, uint32_t val);
-
-    int recv_fd(int fd);
-
-    bool write_usize(int fd, size_t val);
-
-    bool write_string(int fd, std::string_view str);
-}
+#endif /* SOCKET_UTILS_H */

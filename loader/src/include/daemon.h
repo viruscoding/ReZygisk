@@ -1,113 +1,91 @@
-#pragma once
+#ifndef DAEMON_H
+#define DAEMON_H
 
-#include <string_view>
-#include <string>
+#ifdef __cplusplus
+extern "C" {
+#endif /* __cplusplus */
+
+#include <stdbool.h>
+
 #include <unistd.h>
-#include <vector>
 
-#if defined(__LP64__)
-# define LP_SELECT(lp32, lp64) lp64
+#ifdef __LP64__
+  #define LP_SELECT(lp32, lp64) lp64
 #else
-# define LP_SELECT(lp32, lp64) lp32
+  #define LP_SELECT(lp32, lp64) lp32
 #endif
 
-constexpr auto kCPSocketName = "/" LP_SELECT("cp32", "cp64") ".sock";
+#define SOCKET_FILE_NAME LP_SELECT("cp32", "cp64") ".sock"
 
-class UniqueFd {
-    using Fd = int;
-public:
-    UniqueFd() = default;
-
-    UniqueFd(Fd fd) : fd_(fd) {}
-
-    ~UniqueFd() { if (fd_ >= 0) close(fd_); }
-
-    // Disallow copy
-    UniqueFd(const UniqueFd&) = delete;
-
-    UniqueFd& operator=(const UniqueFd&) = delete;
-
-    // Allow move
-    UniqueFd(UniqueFd&& other) { std::swap(fd_, other.fd_); }
-
-    UniqueFd& operator=(UniqueFd&& other) {
-        std::swap(fd_, other.fd_);
-        return *this;
-    }
-
-    // Implict cast to Fd
-    operator const Fd&() const { return fd_; }
-
-private:
-    Fd fd_ = -1;
+enum rezygiskd_actions {
+  PingHeartbeat,
+  GetProcessFlags,
+  GetInfo,
+  ReadModules,
+  RequestCompanionSocket,
+  GetModuleDir,
+  ZygoteRestart,
+  SystemServerStarted,
+  UpdateMountNamespace
 };
 
-struct zygote_modules {
+struct zygisk_modules {
   char **modules;
   size_t modules_count;
 };
 
-enum zygote_root_impl {
-  ZYGOTE_ROOT_IMPL_NONE,
-  ZYGOTE_ROOT_IMPL_APATCH,
-  ZYGOTE_ROOT_IMPL_KERNELSU,
-  ZYGOTE_ROOT_IMPL_MAGISK
+enum root_impl {
+  ROOT_IMPL_NONE,
+  ROOT_IMPL_APATCH,
+  ROOT_IMPL_KERNELSU,
+  ROOT_IMPL_MAGISK
 };
 
-struct zygote_info {
-  struct zygote_modules *modules;
-  enum zygote_root_impl root_impl;
+struct rezygisk_info {
+  struct zygisk_modules *modules;
+  enum root_impl root_impl;
   pid_t pid;
   bool running;
 };
 
 enum mount_namespace_state {
-    Clean,
-    Rooted,
-    Module
+  Clean,
+  Rooted,
+  Module
 };
 
-namespace zygiskd {
+#define TMP_PATH "/data/adb/rezygisk"
 
-    struct ModuleInfo {
-        std::string path;
-        /* TODO: Perhaps we can also remove this and just send paths? */
-        std::string name;
-
-        inline explicit ModuleInfo(std::string path, std::string name) : path(path), name(name) {}
-    };
-
-    enum class SocketAction {
-        PingHeartBeat,
-        GetProcessFlags,
-        GetInfo,
-        ReadModules,
-        RequestCompanionSocket,
-        GetModuleDir,
-        ZygoteRestart,
-        SystemServerStarted,
-        UpdateMountNamespace
-    };
-
-    void Init(const char *path);
-
-    std::string GetTmpPath();
-
-    bool PingHeartbeat();
-
-    std::vector<ModuleInfo> ReadModules();
-
-    uint32_t GetProcessFlags(uid_t uid);
-
-    int ConnectCompanion(size_t index);
-
-    int GetModuleDir(size_t index);
-
-    void ZygoteRestart();
-
-    void SystemServerStarted();
-
-    void GetInfo(struct zygote_info *info);
-
-    std::string UpdateMountNamespace(enum mount_namespace_state mns_state);
+static inline const char *rezygiskd_get_path() {
+  return TMP_PATH;
 }
+
+int rezygiskd_connect(uint8_t retry);
+
+bool rezygiskd_ping();
+
+uint32_t rezygiskd_get_process_flags(uid_t uid);
+
+void rezygiskd_get_info(struct rezygisk_info *info);
+
+void free_rezygisk_info(struct rezygisk_info *info);
+
+bool rezygiskd_read_modules(struct zygisk_modules *modules);
+
+void free_modules(struct zygisk_modules *modules);
+
+int rezygiskd_connect_companion(size_t index);
+
+int rezygiskd_get_module_dir(size_t index);
+
+void rezygiskd_zygote_restart();
+
+void rezygiskd_system_server_started();
+
+bool rezygiskd_update_mns(enum mount_namespace_state nms_state, char *buf, size_t buf_size);
+
+#ifdef __cplusplus
+}
+#endif /* __cplusplus */
+
+#endif /* DAEMON_H */

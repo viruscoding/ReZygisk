@@ -1,5 +1,6 @@
 #pragma once
 
+#include "logging.h"
 #include "jni_helper.hpp"
 
 template <typename T>
