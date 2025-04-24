@@ -156,7 +156,13 @@ bool update_mnt_ns(enum mount_namespace_state mns_state, bool dry_run) {
         return false;
     }
 
-    LOGD("set mount namespace to [%s] fd=[%d]\n", ns_path, updated_ns);
+    const char *mns_state_str = NULL;
+    if (mns_state == Clean) mns_state_str = "clean";
+    else if (mns_state == Module) mns_state_str = "module";
+    else if (mns_state == Rooted) mns_state_str = "rooted";
+    else mns_state_str = "unknown";
+
+    LOGD("set mount namespace to [%s] fd=[%d]: %s", ns_path, updated_ns, mns_state_str);
     if (setns(updated_ns, CLONE_NEWNS) == -1) {
         PLOGE("Failed to set mount namespace [%s]", ns_path);
         close(updated_ns);
@@ -182,6 +188,11 @@ DCL_HOOK_FUNC(int, unshare, int flags) {
         } else if (!(g_ctx->flags[DO_REVERT_UNMOUNT])) {
             update_mnt_ns(Module, false);
         }
+
+        /* INFO: There might be cases, specifically in Magisk, where the app is in
+                   DenyList but also has root privileges. For those, it is up to the
+                   user remove it, and the weird behavior is expected, as the weird
+                   user behavior. */
 
         old_unshare(CLONE_NEWNS);
     }
