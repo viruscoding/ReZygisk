@@ -342,6 +342,14 @@ bool rezygiskd_update_mns(enum mount_namespace_state nms_state, char *buf, size_
     return false;
   }
 
+  if (target_fd == 0) {
+    LOGE("Failed to get target fd");
+
+    close(fd);
+
+    return false;
+  }
+
   snprintf(buf, buf_size, "/proc/%u/fd/%u", target_pid, target_fd);
 
   close(fd);
