@@ -149,6 +149,8 @@ void rezygiskd_get_info(struct rezygisk_info *info) {
     char module_path[PATH_MAX];
     snprintf(module_path, sizeof(module_path), "/data/adb/modules/%s/module.prop", module_name);
 
+    free(module_name);
+
     FILE *module_prop = fopen(module_path, "r");
     if (!module_prop) {
       PLOGE("failed to open module prop file %s", module_path);
