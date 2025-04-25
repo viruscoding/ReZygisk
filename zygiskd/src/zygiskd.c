@@ -643,8 +643,7 @@ void zygiskd_start(char *restrict argv[]) {
         ASSURE_SIZE_WRITE_BREAK("UpdateMountNamespace", "our_pid", ret, sizeof(our_pid));
 
         if ((enum MountNamespaceState)mns_state == Clean) {
-          save_mns_fd(pid, Rooted, impl);
-          save_mns_fd(pid, Module, impl);
+          save_mns_fd(pid, Mounted, impl);
         }
 
         int clean_namespace_fd = save_mns_fd(pid, (enum MountNamespaceState)mns_state, impl);
