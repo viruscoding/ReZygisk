@@ -139,6 +139,8 @@ if [ "$ARCH" = "x86" ] || [ "$ARCH" = "x64" ]; then
     extract "$ZIPFILE" 'lib/x86/libzygisk.so' "$MODPATH/lib" true
     extract "$ZIPFILE" 'lib/x86/libzygisk_ptrace.so' "$MODPATH/bin" true
     mv "$MODPATH/bin/libzygisk_ptrace.so" "$MODPATH/bin/zygisk-ptrace32"
+
+    extract "$ZIPFILE" 'machikado.x86' "$MODPATH" true
   fi
 
   if [ "$SUPPORTS_64BIT" = true ]; then
@@ -148,10 +150,9 @@ if [ "$ARCH" = "x86" ] || [ "$ARCH" = "x64" ]; then
     extract "$ZIPFILE" 'lib/x86_64/libzygisk.so' "$MODPATH/lib64" true
     extract "$ZIPFILE" 'lib/x86_64/libzygisk_ptrace.so' "$MODPATH/bin" true
     mv "$MODPATH/bin/libzygisk_ptrace.so" "$MODPATH/bin/zygisk-ptrace64"
-  fi
 
-  extract "$ZIPFILE" 'machikado.x86' "$MODPATH" true
-  mv "$MODPATH/machikado.x86" "$MODPATH/machikado"
+    extract "$ZIPFILE" 'machikado.x86_64' "$MODPATH" true
+  fi
 else
   if [ "$SUPPORTS_32BIT" = true ]; then
     ui_print "- Extracting arm libraries"
@@ -160,6 +161,8 @@ else
     extract "$ZIPFILE" 'lib/armeabi-v7a/libzygisk.so' "$MODPATH/lib" true
     extract "$ZIPFILE" 'lib/armeabi-v7a/libzygisk_ptrace.so' "$MODPATH/bin" true
     mv "$MODPATH/bin/libzygisk_ptrace.so" "$MODPATH/bin/zygisk-ptrace32"
+
+    extract "$ZIPFILE" 'machikado.arm' "$MODPATH" true
   fi
 
   if [ "$SUPPORTS_64BIT" = true ]; then
@@ -169,10 +172,9 @@ else
     extract "$ZIPFILE" 'lib/arm64-v8a/libzygisk.so' "$MODPATH/lib64" true
     extract "$ZIPFILE" 'lib/arm64-v8a/libzygisk_ptrace.so' "$MODPATH/bin" true
     mv "$MODPATH/bin/libzygisk_ptrace.so" "$MODPATH/bin/zygisk-ptrace64"
-  fi
 
-  extract "$ZIPFILE" 'machikado.arm' "$MODPATH" true
-  mv "$MODPATH/machikado.arm" "$MODPATH/machikado"
+    extract "$ZIPFILE" 'machikado.arm64' "$MODPATH" true
+  fi
 fi
 
 ui_print "- Setting permissions"
