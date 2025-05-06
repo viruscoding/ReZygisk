@@ -157,7 +157,11 @@ androidComponents.onVariants { variant ->
                 getSign("machikado.x86", "x86", false)
             } else {
                 println("no private_key found, this build will not be signed")
+
+                root.file("machikado.arm64").asFile.createNewFile()
                 root.file("machikado.arm").asFile.createNewFile()
+
+                root.file("machikado.x86_64").asFile.createNewFile()
                 root.file("machikado.x86").asFile.createNewFile()
             }
 
