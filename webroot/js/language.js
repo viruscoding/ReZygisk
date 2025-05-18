@@ -49,7 +49,7 @@ export async function getTranslations(locate) {
 }
 
 export async function getAvailableLanguages() {
-  const lsCmd = await exec('ls /data/adb/modules/zygisksu/webroot/lang')
+  const lsCmd = await exec('ls /data/adb/modules/rezygisk/webroot/lang')
 
   if (lsCmd.errno !== 0) return setError('WebUI', lsCmd.stderr)
 
