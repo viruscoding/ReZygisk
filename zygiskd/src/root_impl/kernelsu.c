@@ -52,7 +52,6 @@ void ksu_get_existence(struct root_impl_state *state) {
     if (mode[0] != '\0') state->variant = KNext;
     else state->variant = KOfficial;
 
-    state->variant = KNext;
     variant = state->variant;
   }
   else if (version >= 1 && version <= MIN_KSU_VERSION - 1) state->state = TooOld;
