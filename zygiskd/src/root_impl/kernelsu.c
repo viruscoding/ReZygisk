@@ -24,7 +24,6 @@
 
 static enum kernelsu_variants variant = KOfficial;
 
-static uid_t manager_uid = 0;
 static bool supports_manager_uid_retrieval = false;
 
 void ksu_get_existence(struct root_impl_state *state) {
@@ -101,8 +100,8 @@ bool ksu_uid_is_manager(uid_t uid) {
              KernelSU Next have different package names.
   */
   if (supports_manager_uid_retrieval) {
-    if (manager_uid == 0)
-      prctl(KERNEL_SU_OPTION, CMD_GET_MANAGER_UID, &manager_uid, NULL, NULL);
+    uid_t manager_uid = 0;
+    prctl(KERNEL_SU_OPTION, CMD_GET_MANAGER_UID, &manager_uid, NULL, NULL);
 
     return uid == manager_uid;
   }
