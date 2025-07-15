@@ -177,40 +177,6 @@ bool update_mnt_ns(enum mount_namespace_state mns_state, bool dry_run) {
     return true;
 }
 
-// Unmount stuffs in the process's private mount namespace
-DCL_HOOK_FUNC(int, unshare, int flags) {
-    int res = old_unshare(flags);
-    if (g_ctx && (flags & CLONE_NEWNS) != 0 && res == 0 &&
-        // For some unknown reason, unmounting app_process in SysUI can break.
-        // This is reproducible on the official AVD running API 26 and 27.
-        // Simply avoid doing any unmounts for SysUI to avoid potential issues.
-        !g_ctx->flags[SERVER_FORK_AND_SPECIALIZE] && !(g_ctx->info_flags & PROCESS_IS_FIRST_STARTED)) {
-
-        /* INFO: There might be cases, specifically in Magisk, where the app is in
-                   DenyList but also has root privileges. For those, it is up to the
-                   user remove it, and the weird behavior is expected, as the weird
-                   user behavior. */
-
-        /* INFO: For cases like Magisk, where you can only give an app SU if it was
-                   either requested before or if it's not in DenyList, we cannot
-                   umount it, or else it will not be (easily) possible to give new
-                   apps SU. Apps that are not marked in APatch/KernelSU to be umounted
-                   are also expected to have AP/KSU mounts there, so we will follow the
-                   same idea by not umounting any mount. */
-
-        if (g_ctx->info_flags & (PROCESS_IS_MANAGER | PROCESS_GRANTED_ROOT) || !(g_ctx->flags[DO_REVERT_UNMOUNT])) {
-            update_mnt_ns(Mounted, false);
-        }
-
-        old_unshare(CLONE_NEWNS);
-    }
-
-    /* INFO: To spoof the errno value */
-    errno = 0;
-
-    return res;
-}
-
 // We cannot directly call `dlclose` to unload ourselves, otherwise when `dlclose` returns,
 // it will return to our code which has been unmapped, causing segmentation fault.
 // Instead, we hook `pthread_attr_setstacksize` which will be called when VM daemon threads start.
@@ -1035,7 +1001,6 @@ void hook_functions() {
     }
 
     PLT_HOOK_REGISTER(android_runtime_dev, android_runtime_inode, fork);
-    PLT_HOOK_REGISTER(android_runtime_dev, android_runtime_inode, unshare);
     PLT_HOOK_REGISTER(android_runtime_dev, android_runtime_inode, strdup);
     PLT_HOOK_REGISTER(android_runtime_dev, android_runtime_inode, property_get);
     hook_commit();
