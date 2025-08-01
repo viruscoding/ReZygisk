@@ -68,11 +68,7 @@ task("buildAndStrip") {
       .redirectOutput(ProcessBuilder.Redirect.PIPE)
       .start()
       .inputStream.bufferedReader().readText().trim()
-    val machine = ProcessBuilder("uname", "-m")
-      .redirectOutput(ProcessBuilder.Redirect.PIPE)
-      .start()
-      .inputStream.bufferedReader().readText().trim()
-    val hostPlatform = "$osName-$machine"
+    val hostPlatform = "$osName-x86_64"
 
     val aarch64Compiler = Paths.get(ndkPath, "toolchains", "llvm", "prebuilt", hostPlatform, "bin", "aarch64-linux-android34-clang").toString()
     val armv7aCompiler = Paths.get(ndkPath, "toolchains", "llvm", "prebuilt", hostPlatform, "bin", "armv7a-linux-androideabi34-clang").toString()
