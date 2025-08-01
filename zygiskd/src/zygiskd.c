@@ -44,74 +44,24 @@ enum Architecture {
 #define TMP_PATH "/data/adb/rezygisk"
 #define CONTROLLER_SOCKET TMP_PATH "/init_monitor"
 #define PATH_CP_NAME TMP_PATH "/" lp_select("cp32.sock", "cp64.sock")
-#define ZYGISKD_FILE PATH_MODULES_DIR "/zygisksu/bin/zygiskd" lp_select("32", "64")
-#define ZYGISKD_PATH "/data/adb/modules/zygisksu/bin/zygiskd" lp_select("32", "64")
+#define ZYGISKD_FILE PATH_MODULES_DIR "/rezygisk/bin/zygiskd" lp_select("32", "64")
+#define ZYGISKD_PATH "/data/adb/modules/rezygisk/bin/zygiskd" lp_select("32", "64")
 
 static enum Architecture get_arch(void) {
-  char system_arch[32];
-  get_property("ro.product.cpu.abi", system_arch);
+  char system_arch[64] = { 0 };
+  get_property("ro.system.product.cpu.abilist", system_arch);
 
-  if (strstr(system_arch, "arm") != NULL) return lp_select(ARM32, ARM64);
+  if (system_arch[0] == '\0')
+    get_property("ro.product.cpu.abilist", system_arch);
+
+  /* INFO: "PC" architectures should have priority because in an emulator
+             the native architecture should have priority over the emulated
+             architecture for "native" reasons. */
   if (strstr(system_arch, "x86") != NULL) return lp_select(X86, X86_64);
+  if (strstr(system_arch, "arm") != NULL) return lp_select(ARM32, ARM64);
 
   LOGE("Unsupported system architecture: %s\n", system_arch);
   exit(1);
-}
-
-int create_library_fd(const char *restrict so_path) {
-  int so_fd = open(so_path, O_RDONLY);
-  if (so_fd == -1) {
-    LOGE("Failed opening so file: %s\n", strerror(errno));
-
-    return -1;
-  }
-
-  off_t so_size = lseek(so_fd, 0, SEEK_END);
-  if (so_size == -1) {
-    LOGE("Failed getting so file size: %s\n", strerror(errno));
-
-    close(so_fd);
-
-    return -1;
-  }
-
-  if (lseek(so_fd, 0, SEEK_SET) == -1) {
-    LOGE("Failed seeking so file: %s\n", strerror(errno));
-
-    close(so_fd);
-
-    return -1;
-  }
-
-  /* INFO: This is required as older implementations of glibc may not
-             have the memfd_create function call, causing a crash. */
-  int memfd = (int)syscall(SYS_memfd_create, "jit-cache-zygisk", MFD_ALLOW_SEALING);
-  if (memfd == -1) {
-    LOGE("Failed creating memfd: %s\n", strerror(errno));
-
-    return -1;
-  }
-
-  if (sendfile(memfd, so_fd, NULL, (size_t)so_size) == -1) {
-    LOGE("Failed copying so file to memfd: %s\n", strerror(errno));
-
-    close(so_fd);
-    close(memfd);
-
-    return -1;
-  }
-
-  close(so_fd);
-
-  if (fcntl(memfd, F_ADD_SEALS, F_SEAL_SHRINK | F_SEAL_GROW | F_SEAL_WRITE | F_SEAL_SEAL) == -1) {
-    LOGE("Failed sealing memfd: %s\n", strerror(errno));
-
-    close(memfd);
-
-    return -1;
-  }
-
-  return memfd;
 }
 
 /* WARNING: Dynamic memory based */
@@ -139,7 +89,7 @@ static void load_modules(enum Architecture arch, struct Context *restrict contex
   struct dirent *entry;
   while ((entry = readdir(dir)) != NULL) {
     if (entry->d_type != DT_DIR) continue; /* INFO: Only directories */
-    if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0 || strcmp(entry->d_name, "zygisksu") == 0) continue;
+    if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0 || strcmp(entry->d_name, "rezygisk") == 0) continue;
 
     char *name = entry->d_name;
     char so_path[PATH_MAX];
@@ -166,7 +116,7 @@ static void load_modules(enum Architecture arch, struct Context *restrict contex
       errno = 0;
     } else continue;
 
-    int lib_fd = create_library_fd(so_path);
+    int lib_fd = open(so_path, O_RDONLY | O_CLOEXEC);
     if (lib_fd == -1) {
       LOGE("Failed loading module `%s`\n", name);
 
@@ -186,6 +136,8 @@ static void load_modules(enum Architecture arch, struct Context *restrict contex
     context->modules[context->len].companion = -1;
     context->len++;
   }
+
+  closedir(dir);
 }
 
 static void free_modules(struct Context *restrict context) {
@@ -311,7 +263,6 @@ static int spawn_companion(char *restrict argv[], char *restrict name, int lib_f
 struct __attribute__((__packed__)) MsgHead {
   unsigned int cmd;
   int length;
-  char data[0];
 };
 
 /* WARNING: Dynamic memory based */
@@ -324,29 +275,20 @@ void zygiskd_start(char *restrict argv[]) {
   struct root_impl impl;
   get_impl(&impl);
   if (impl.impl == None || impl.impl == Multiple) {
-    struct MsgHead *msg = NULL;
-  
-    if (impl.impl == None) {
-      msg = malloc(sizeof(struct MsgHead) + strlen("Unsupported environment: Unknown root implementation") + 1);
-    } else {
-      msg = malloc(sizeof(struct MsgHead) + strlen("Unsupported environment: Multiple root implementations found") + 1);
-    }
-    if (msg == NULL) {
-      LOGE("Failed allocating memory for message.\n");
+    char *msg_data = NULL;
 
-      return;
-    }
+    if (impl.impl == None) msg_data = "Unsupported environment: Unknown root implementation";
+    else msg_data = "Unsupported environment: Multiple root implementations found";
 
-    msg->cmd = DAEMON_SET_ERROR_INFO;
-    if (impl.impl == None) {
-      msg->length = sprintf(msg->data, "Unsupported environment: Unknown root implementation");
-    } else {
-      msg->length = sprintf(msg->data, "Unsupported environment: Multiple root implementations found");
-    }
+    struct MsgHead msg = {
+      .cmd = DAEMON_SET_ERROR_INFO,
+      .length = (int)strlen(msg_data) + 1
+    };
 
-    unix_datagram_sendto(CONTROLLER_SOCKET, (void *)msg, (size_t)((int)sizeof(struct MsgHead) + msg->length));
+    unix_datagram_sendto(CONTROLLER_SOCKET, &msg, sizeof(struct MsgHead));
+    unix_datagram_sendto(CONTROLLER_SOCKET, msg_data, (size_t)msg.length);
 
-    free(msg);
+    free(msg_data);
   } else {
     enum Architecture arch = get_arch();
     load_modules(arch, &context);
@@ -393,13 +335,24 @@ void zygiskd_start(char *restrict argv[]) {
 
     size_t msg_length = strlen("Root: , Modules: ") + strlen(impl_name) + module_list_len + 1;
 
-    struct MsgHead *msg = malloc(sizeof(struct MsgHead) + msg_length);
-    msg->length = snprintf(msg->data, msg_length, "Root: %s, Modules: %s", impl_name, module_list) + 1;
-    msg->cmd = DAEMON_SET_INFO;
+    struct MsgHead msg = {
+      .cmd = DAEMON_SET_INFO,
+      .length = (int)msg_length
+    };
 
-    unix_datagram_sendto(CONTROLLER_SOCKET, (void *)msg, (size_t)((int)sizeof(struct MsgHead) + msg->length));
+    char *msg_data = malloc(msg_length);
+    if (msg_data == NULL) {
+      LOGE("Failed allocating memory for message data.\n");
 
-    free(msg);
+      return;
+    }
+
+    snprintf(msg_data, msg_length, "Root: %s, Modules: %s", impl_name, module_list);
+
+    unix_datagram_sendto(CONTROLLER_SOCKET, &msg, sizeof(struct MsgHead));
+    unix_datagram_sendto(CONTROLLER_SOCKET, msg_data, msg_length);
+
+    free(msg_data);
     free(module_list);
   }
 
@@ -410,6 +363,10 @@ void zygiskd_start(char *restrict argv[]) {
     return;
   }
 
+  struct sigaction sa = { .sa_handler = SIG_IGN };
+  sigaction(SIGPIPE, &sa, NULL);
+
+  bool first_process = true;
   while (1) {
     int client_fd = accept(socket_fd, NULL, NULL);
     if (client_fd == -1) {
@@ -434,8 +391,12 @@ void zygiskd_start(char *restrict argv[]) {
 
     switch (action) {
       case PingHeartbeat: {
-        enum DaemonSocketAction msgr = ZYGOTE_INJECTED;
-        unix_datagram_sendto(CONTROLLER_SOCKET, &msgr, sizeof(enum DaemonSocketAction));
+        struct MsgHead msg = {
+          .cmd = ZYGOTE_INJECTED,
+          .length = 0
+        };
+
+        unix_datagram_sendto(CONTROLLER_SOCKET, &msg, sizeof(struct MsgHead));
 
         break;
       }
@@ -450,8 +411,12 @@ void zygiskd_start(char *restrict argv[]) {
         break;
       }
       case SystemServerStarted: {
-        enum DaemonSocketAction msgr = SYSTEM_SERVER_STARTED;
-        unix_datagram_sendto(CONTROLLER_SOCKET, &msgr, sizeof(enum DaemonSocketAction));
+        struct MsgHead msg = {
+          .cmd = SYSTEM_SERVER_STARTED,
+          .length = 0
+        };
+
+        unix_datagram_sendto(CONTROLLER_SOCKET, &msg, sizeof(struct MsgHead));
 
         if (impl.impl == None || impl.impl == Multiple) {
           LOGI("Unsupported environment detected. Exiting.\n");
@@ -465,51 +430,35 @@ void zygiskd_start(char *restrict argv[]) {
 
         break;
       }
-      /* TODO: Move to another thread and save client fds to an epoll list
-                 so that we can, in a single-thread, deal with multiple logcats */
-      case RequestLogcatFd: {
-        uint8_t level = 0;
-        ssize_t ret = read_uint8_t(client_fd, &level);
-        ASSURE_SIZE_READ_BREAK("RequestLogcatFd", "level", ret, sizeof(level));
-
-        char tag[128 + 1];
-        ret = read_string(client_fd, tag, sizeof(tag));
-        if (ret == -1) {
-          LOGE("Failed reading logcat tag.\n");
-
-          close(client_fd);
-
-          break;
-        }
-
-        char message[1024 + 1];
-        ret = read_string(client_fd, message, sizeof(message));
-        if (ret == -1) {
-          LOGE("Failed reading logcat message.\n");
-
-          close(client_fd);
-
-          break;
-        }
-
-        __android_log_print(level, tag, "%s", message);
-
-        break;
-      }
       case GetProcessFlags: {
         uint32_t uid = 0;
         ssize_t ret = read_uint32_t(client_fd, &uid);
         ASSURE_SIZE_READ_BREAK("GetProcessFlags", "uid", ret, sizeof(uid));
 
+        /* INFO: Only used for Magisk, as it saves process names and not UIDs. */
+        char process[PROCESS_NAME_MAX_LEN];
+        ret = read_string(client_fd, process, sizeof(process));
+        if (ret == -1) {
+          LOGE("Failed reading process name.\n");
+
+          break;
+        }
+
         uint32_t flags = 0;
-        if (uid_is_manager(uid)) {
-          flags |= PROCESS_IS_MANAGER;
+        if (first_process) {
+          flags |= PROCESS_IS_FIRST_STARTED;
+
+          first_process = false;
         } else {
-          if (uid_granted_root(uid)) {
-            flags |= PROCESS_GRANTED_ROOT;
-          }
-          if (uid_should_umount(uid)) {
-            flags |= PROCESS_ON_DENYLIST;
+          if (uid_is_manager(uid)) {
+            flags |= PROCESS_IS_MANAGER;
+          } else {
+            if (uid_granted_root(uid)) {
+              flags |= PROCESS_GRANTED_ROOT;
+            }
+            if (uid_should_umount(uid, (const char *const)process)) {
+              flags |= PROCESS_ON_DENYLIST;
+            }
           }
         }
 
@@ -572,7 +521,7 @@ void zygiskd_start(char *restrict argv[]) {
         size_t modules_len = context.len;
         ret = write_size_t(client_fd, modules_len);
         ASSURE_SIZE_WRITE_BREAK("GetInfo", "modules_len", ret, sizeof(modules_len));
-        
+
         for (size_t i = 0; i < modules_len; i++) {
           ret = write_string(client_fd, context.modules[i].name);
           if (ret == -1) {
@@ -589,14 +538,22 @@ void zygiskd_start(char *restrict argv[]) {
         ssize_t ret = write_size_t(client_fd, clen);
         ASSURE_SIZE_WRITE_BREAK("ReadModules", "len", ret, sizeof(clen));
 
-        for (size_t i = 0; i < clen; i++) {
-          if (write_string(client_fd, context.modules[i].name) == -1) {
-            LOGE("Failed writing module name.\n");
+        enum Architecture arch = get_arch();
 
-            break;
-          }
-          if (write_fd(client_fd, context.modules[i].lib_fd) == -1) {
-            LOGE("Failed writing module fd.\n");
+        char arch_str[32];
+        switch (arch) {
+          case ARM64: { strcpy(arch_str, "arm64-v8a"); break; }
+          case X86_64: { strcpy(arch_str, "x86_64"); break; }
+          case ARM32: { strcpy(arch_str, "armeabi-v7a"); break; }
+          case X86: { strcpy(arch_str, "x86"); break; }
+        }
+
+        for (size_t i = 0; i < clen; i++) {
+          char lib_path[PATH_MAX];
+          snprintf(lib_path, PATH_MAX, "/data/adb/modules/%s/zygisk/%s.so", context.modules[i].name, arch_str);
+
+          if (write_string(client_fd, lib_path) == -1) {
+            LOGE("Failed writing module path.\n");
 
             break;
           }
@@ -701,9 +658,40 @@ void zygiskd_start(char *restrict argv[]) {
 
         break;
       }
+      case UpdateMountNamespace: {
+        pid_t pid = 0;
+        ssize_t ret = read_uint32_t(client_fd, (uint32_t *)&pid);
+        ASSURE_SIZE_READ_BREAK("UpdateMountNamespace", "pid", ret, sizeof(pid));
+
+        uint8_t mns_state = 0;
+        ret = read_uint8_t(client_fd, &mns_state);
+        ASSURE_SIZE_READ_BREAK("UpdateMountNamespace", "mns_state", ret, sizeof(mns_state));
+
+        uint32_t our_pid = (uint32_t)getpid();
+        ret = write_uint32_t(client_fd, our_pid);
+        ASSURE_SIZE_WRITE_BREAK("UpdateMountNamespace", "our_pid", ret, sizeof(our_pid));
+
+        if ((enum MountNamespaceState)mns_state == Clean)
+          save_mns_fd(pid, Mounted, impl);
+
+        int ns_fd = save_mns_fd(pid, (enum MountNamespaceState)mns_state, impl);
+        if (ns_fd == -1) {
+          LOGE("Failed to save mount namespace fd for pid %d: %s\n", pid, strerror(errno));
+
+          ret = write_uint32_t(client_fd, (uint32_t)0);
+          ASSURE_SIZE_WRITE_BREAK("UpdateMountNamespace", "ns_fd", ret, sizeof(ns_fd));
+
+          break;
+        }
+
+        ret = write_uint32_t(client_fd, (uint32_t)ns_fd);
+        ASSURE_SIZE_WRITE_BREAK("UpdateMountNamespace", "ns_fd", ret, sizeof(ns_fd));
+
+        break;
+      }
     }
 
-    if (action != RequestCompanionSocket && action != RequestLogcatFd) close(client_fd);
+    if (action != RequestCompanionSocket) close(client_fd);
 
     continue;
   }

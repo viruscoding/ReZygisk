@@ -42,7 +42,7 @@ val CFlagsRelease = arrayOf(
 )
 
 val CFlagsDebug = arrayOf(
-  "-g", "-O0"
+  "-g", "-O0", "-DDEBUG"
 )
 
 val Files = arrayOf(
@@ -51,7 +51,6 @@ val Files = arrayOf(
   "root_impl/kernelsu.c",
   "root_impl/magisk.c",
   "companion.c",
-  "dl.c",
   "main.c",
   "utils.c",
   "zygiskd.c"

@@ -1,73 +1,77 @@
 # ReZygisk
 
-[English](https://github.com/PerformanC/ReZygisk/blob/main/README.md)|[简体中文](/READMEs/README_zh-CN.md)|[繁體中文](/READMEs/README_zh-TW.md)
+[Bahasa Indonesia](/READMEs/README_id-ID.md)|[Tiếng Việt](/READMEs/README_vi-VN.md)|[Português Brasileiro](/READMEs/README_pt-BR.md)|[French](/READMEs/README_fr-FR.md)
 
-ReZygiskはkernelSU、Magisk、APatchにZygiskのAPIサポートを提供するスタンドアローンZygiskであるZygisk Nextのフォークです。
+ReZygiskはZygiskのスタンドアローン実装であるZygisk Nextのフォークです。ReZygiskは、KernelSU、APatch、Magisk（オフィシャルバージョンとKitsuneバージョン両方）それぞれへのZygisk APIサポートを備えています。
 
-ReZygiskは更に高速かつ効率的なZygisk APIとより寛容なライセンスを、コードベースをC（もともとはC++とRustでした）でアップデート/書き直すことで実現することを目標としています。
+ReZygiskはコードベースをCに移行し、よりモダンなコードで書き換えることを目標にしています。これにより、Zygisk APIのより効率的かつ高速な実装と、FOSSライセンスの両方を備えることができています。
 
-> [!NOTE]
-> このモジュール/フォークはWIP（Work in Progress、すべての作業が進行中であることを意味します）: ReleasesタブのZipのみを使用するようにしてください。
->
-> GitHub [Actions](https://github.com/PerformanC/ReZygisk/actions) よりZipをダウンロードして使用することも可能ですが、デバイスがブートループなどの不具合が起きる可能性があります。ユーザー自身の裁量にて使用してください。
+## なぜReZygiskを選ぶべきか
 
-## ReZygiskを使う理由
+Zygisk Nextの最新リリースはオープンソースではなく、コードをその開発者のみにアクセス可能にしています。これは我々のように一般の開発者の貢献を無下にするだけでなく、Zygisk Nextがroot権限で走るアプリなのにもかかわらずコードにアクセスできないため、セキュリティ上でも深刻な問題が有ります。
 
-Zygisk Nextの最新リリースはクローズドソースであり、コードはプロジェクトの開発者のみアクセスできるものです。これはコミュニティがコードに貢献することを妨げるだけではなく、コード監査をも難しくしています。これはZygisk Nextがルート権限で作動するアプリであるため、セキュリティ上深刻な問題です。
-
-Zygisk Nextの開発者はAndroid Communityにて有名かつ信用されています。が、これはコード自体が悪意の無いこと/脆弱でないことを証明するものではありません。
-
-我々（PerformanC）はZygisk Nextの開発者らがコードをクローズドに保つ重要な理由があることは承知していますが、我々はオープンソース/コミュニティドリブンにすることが重要だと考えています。
+Zygisk Nextの開発者達は有名かつコミュニティからも信頼されていますが、これはコードが100%悪意が無いことや脆弱性が無いことを意味しません。我々（PerformanC）は彼らがZygisk Nextをクローズドソースにする理由も理解していますが、我々はその逆を信じます。
 
 ## メリット
 
-- オープンソース、Free to Use、FOSS (永続的)
+- FOSS (無制限)
 
 ## 依存関係
 
-| ツール           | 説明                                    |
+| ツール           | 説明                                   |
 |-----------------|----------------------------------------|
-| `Android NDK`   | Androidのネイティブ開発環境キット           |
+| `Android NDK`   | Native Development Kit for Android     |
 
 ### C++ 依存関係
 
-| 依存        | 説明                          |
+| 依存関係    | 説明                           |
 |------------|-------------------------------|
-| `lsplt`    | シンプルなAndroidのPLTフック     |
-
-## 使い方
-
-ただいま調理中です、しばらくお待ち下さい！（できるだけ早くお届けします）
+| `lsplt`    | Simple PLT Hook for Android   |
 
 ## インストール
 
-現状、ステーブルリリースはありません。（できるだけ早くお届けします）
+### 1. 必要なZipファイルを選択
+
+ReZygiskの安定性や匿名性のためには、ビルドファイル/Zipファイルの選択は**非常に重要**です。しかしながら、これはそこまで難しくもありません。
+
+- `release` バージョンが基本的にはおすすめです。アプリレベルのログが出力されなかったりなど、より効率化されたバイナリが提供されるためです。
+- `debug` バージョンはreleaseバージョンの反対です。重いログの出力がなされたり、高速化されていないバイナリが提供されます。このため、このバージョンは**デバッグ用に**、もしくは**Issueを作るためにログを入手する**ときのみに使われるべきです。
+
+ブランチに関しては、基本的に`main`ブランチを選択すべきです。しかしながら、PerformanCの開発者に違うブランチを使うように言われたり、あなたがベータ版のコードを使うことのリスクを理解しかつ実装されたばかりの機能を使いたいのならば違うブランチを選択することも選択肢の一つでしょう。
+
+### 2. Zipファイルをフラッシュ
+
+正しいビルドを選択したあとは、ReZygiskのビルドを現在使用しているルートマネージャー（MagiskやKernelSU等）を使用してフラッシュしてください。これは、マネージャーで`Modules`セクションを開きダウンロードしたビルドファイルを選択することでできます。
+
+フラッシュしたあとは、インストールログを確認して、エラーがないか確かめてください。なんのエラーも起きていなければ、デバイスを再起動してください。
+
+> [!WARNING]
+> Magiskを使用しているのならば、ビルトインのZygiskがReZygiskと競合するため無効化してください。Magiskの`設定`セクションを開き、Zygiskオプションを無効化することでできます。
+### 3. インストールを確認
+
+再起動後、ルートマネージャーの`Modules`セクションをチェックすることによりReZygiskが正常に動いているかどうか確認できます。
+説明欄は、必要なデーモンが動作していることを示しているはずです。例えば、あなたの端末が64bitと32bitの両方をサポートしている場合、右記のように見えるはずです: `[monitor: 😋 tracing, zygote64: 😋 injected, daemon64: 😋 running (...) zygote32: 😋 injected, daemon32: 😋 running (...)] Standalone implementation of Zygisk.`
 
 ## 翻訳
 
-現状では、翻訳を他のプラットフォーム上で展開することはしていません。
+There are currently two different ways to contribute translations for ReZygisk:
 
-が、[add/new-webui](https://github.com/PerformanC/ReZygisk/tree/add/new-webui) ブランチにて翻訳作業に参加していただくことができます。
-
-他の開発者さんたちがあなたの貢献を確認できるように、 [TRANSLATOR.md](https://github.com/PerformanC/ReZygisk/blob/add/new-webui/TRANSLATOR.md) にあなたのプロフィールを追加することを忘れないでください！
+- READMEの翻訳は、`READMEs`フォルダに`README_<language code>.md`というファイルを作り、そこに翻訳を書き込んでください。その後、プルリクエストを送信してくださいlang` folder and your credits to the `TRANSLATOR.md` file, in alphabetic order.
+- ReZygisk WebUIの翻訳のためには、まず[Crowdin](https://crowdin.com/project/rezygisk)で貢献する必要が有ります。一度貢献を許可され、`.json`ファイルを入手したならば、そのファイルを元に新しい言語のファイルを作り、その`.json`ファイルを`webroot/lang`フォルダに入れてください。更に、TRANSLATOR.mdにあなたのクレジットを付与するのも忘れないでください！（なお名前の順番はアルファベット順です）
 
 ## サポート
-For any question related to ReZygisk or other PerformanC projects, feel free to join any of the following channels below:
-ReZygisk/他のPerformanCのプロジェクトに対する質問がある場合は、以下のどれかに参加してください！
+
+ReZygiskやPerformanCのプロジェクトに関して質問がある場合、以下のいずれかに参加して質問してください。
 
 - Discord チャンネル: [PerformanC](https://discord.gg/uPveNfTuCJ)
-- ReZygisk Telegram チャンネル: [@rezygiskchat](https://t.me/rezygiskchat)
+- ReZygisk Telegram チャンネル: [@rezygisk](https://t.me/rezygisk)
 - PerformanC Telegram チャンネル: [@performancorg](https://t.me/performancorg)
+- PerformanC Signal Group: [@performanc](https://signal.group/#CjQKID3SS8N5y4lXj3VjjGxVJnzNsTIuaYZjj3i8UhipAS0gEhAedxPjT5WjbOs6FUuXptcT)
 
 ## 貢献
 
-貢献をしたい場合、PerformanCの[Contribution Guidelines](https://github.com/PerformanC/contributing)に従うことが必要になります。
-
-セキュリティーポリシー、行動規範、シンタックススタンダードを採用してください。
+[Contribution Guidelines](https://github.com/PerformanC/contributing)に従ってください。セキュリティポリシー、コードスタイル等、すべて従う必要が有ります。
 
 ## ライセンス
 
-ReZygiskは基本的にDr-TSNGによるGPLライセンス下にてライセンスされています。
-
-ただし、書き直しされたコードに関してはPerformanCによるAGPL3.0ライセンスにてライセンスされています。
-詳細については [Open Source Initiative](https://opensource.org/licenses/AGPL-3.0) を参照してください。
+ReZygiskはDr-TSNGによるGPLライセンスと、PerformanCが書き直したコードに関してはThe PerformanC OrganizationによるAGPL 3.0ライセンスの元に配布されます。[Open Source Initiative](https://opensource.org/licenses/AGPL-3.0)で、より詳しい情報を得ることができます。

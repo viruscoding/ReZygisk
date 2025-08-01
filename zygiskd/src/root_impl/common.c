@@ -1,6 +1,9 @@
 #include <stdio.h>
+#include <string.h>
+#include <errno.h>
 
 #include <sys/types.h>
+#include <sys/stat.h>
 
 #include "../utils.h"
 #include "kernelsu.h"
@@ -27,6 +30,7 @@ void root_impls_setup(void) {
     impl.impl = Multiple;
   } else if (state_ksu.state == Supported) {
     impl.impl = KernelSU;
+    impl.variant = state_ksu.variant;
   } else if (state_apatch.state == Supported) {
     impl.impl = APatch;
   } else if (state_magisk.state == Supported) {
@@ -91,16 +95,16 @@ bool uid_granted_root(uid_t uid) {
   }
 }
 
-bool uid_should_umount(uid_t uid) {
+bool uid_should_umount(uid_t uid, const char *const process) {
   switch (impl.impl) {
     case KernelSU: {
       return ksu_uid_should_umount(uid);
     }
     case APatch: {
-      return apatch_uid_should_umount(uid);
+      return apatch_uid_should_umount(uid, process);
     }
     case Magisk: {
-      return magisk_uid_should_umount(uid);
+      return magisk_uid_should_umount(process);
     }
     default: {
       return false;

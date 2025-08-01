@@ -65,7 +65,10 @@
     return -1;                                                                                                   \
   }
 
-#define write_func_def(type)               \
+#define IS_ISOLATED_SERVICE(uid)      \
+  ((uid) >= 90000 && (uid) < 1000000)
+
+#define write_func_def(type)              \
   ssize_t write_## type(int fd, type val)
 
 #define read_func_def(type)               \
@@ -106,5 +109,7 @@ bool check_unix_socket(int fd, bool block);
 int non_blocking_execv(const char *restrict file, char *const argv[]);
 
 void stringify_root_impl_name(struct root_impl impl, char *restrict output);
+
+int save_mns_fd(int pid, enum MountNamespaceState mns_state, struct root_impl impl);
 
 #endif /* UTILS_H */

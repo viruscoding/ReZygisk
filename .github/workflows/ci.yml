@@ -1,4 +1,4 @@
-name: CI
+name: Untrusted CI
 
 on:
   push:
@@ -6,16 +6,11 @@ on:
 
   pull_request:
   merge_group:
+  workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    env:
-      CCACHE_COMPILERCHECK: "%compiler% -dumpmachine; %compiler% -dumpversion"
-      CCACHE_NOHASHDIR: "true"
-      CCACHE_HARDLINK: "true"
-      CCACHE_BASEDIR: "${{ github.workspace }}"
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -30,24 +25,13 @@ jobs:
           java-version: "17"
 
       - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v4.2.1
-        with:
-          gradle-home-cache-cleanup: true
-
-      - name: Set up ccache
-        uses: hendrikmuhs/ccache-action@v1.2
-        with:
-          max-size: 2G
-          key: ${{ runner.os }}
-          restore-keys: ${{ runner.os }}
-          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+        uses: gradle/actions/setup-gradle@v4
 
       - name: Build with Gradle
         run: |
           echo 'org.gradle.parallel=true' >> gradle.properties
           echo 'org.gradle.vfs.watch=true' >> gradle.properties
           echo 'org.gradle.jvmargs=-Xmx2048m' >> gradle.properties
-          echo 'android.native.buildOutput=verbose' >> gradle.properties
           sed -i 's/org.gradle.unsafe.configuration-cache=true//g' gradle.properties
           ./gradlew zipRelease
           ./gradlew zipDebug

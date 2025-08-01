@@ -28,55 +28,38 @@ char *magisk_managers[] = {
 #define DEBUG_RAMDISK_MAGISK lp_select("/debug_ramdisk/magisk32", "/debug_ramdisk/magisk64")
 #define BITLESS_DEBUG_RAMDISK_MAGISK "/debug_ramdisk/magisk"
 
-enum magisk_variants variant = Official;
+static enum magisk_variants variant = MOfficial;
 /* INFO: Longest path */
-static char path_to_magisk[sizeof(DEBUG_RAMDISK_MAGISK)];
+static char path_to_magisk[sizeof(DEBUG_RAMDISK_MAGISK)] = { 0 };
 bool is_using_sulist = false;
 
 void magisk_get_existence(struct root_impl_state *state) {
-  struct stat s;
-  if (stat(SBIN_MAGISK, &s) != 0) {
-    if (errno != ENOENT) {
-      LOGE("Failed to stat Magisk /sbin/magisk binary: %s\n", strerror(errno));
-    }
-    errno = 0;
+  const char *magisk_files[] = {
+    SBIN_MAGISK,
+    BITLESS_SBIN_MAGISK,
+    DEBUG_RAMDISK_MAGISK,
+    BITLESS_DEBUG_RAMDISK_MAGISK
+  };
 
-    if (stat(BITLESS_SBIN_MAGISK, &s) != 0) {
+  for (size_t i = 0; i < sizeof(magisk_files) / sizeof(magisk_files[0]); i++) {
+    if (access(magisk_files[i], F_OK) != 0) {
       if (errno != ENOENT) {
-        LOGE("Failed to stat Magisk %s binary: %s\n", BITLESS_SBIN_MAGISK, strerror(errno));
+        LOGE("Failed to access Magisk binary: %s\n", strerror(errno));
       }
       errno = 0;
 
-      if (stat(DEBUG_RAMDISK_MAGISK, &s) != 0) {
-        if (errno != ENOENT) {
-          LOGE("Failed to stat Magisk %s binary: %s\n", DEBUG_RAMDISK_MAGISK, strerror(errno));
-        }
-        errno = 0;
-
-        if (stat(BITLESS_DEBUG_RAMDISK_MAGISK, &s) != 0) {
-          if (errno != ENOENT) {
-            LOGE("Failed to stat Magisk /debug_ramdisk/magisk binary: %s\n", strerror(errno));
-          }
-          errno = 0;
-
-          state->state = Inexistent;
-
-          return;
-        }
-
-        /* INFO: /debug_ramdisk/magisk64 (or 32) doesn't exist but /debug_ramdisk/magisk does */
-        strcpy(path_to_magisk, BITLESS_DEBUG_RAMDISK_MAGISK);
-      } else {
-        /* INFO: /sbin/magisk doesn't exist but /debug_ramdisk/magisk does */
-        strcpy(path_to_magisk, DEBUG_RAMDISK_MAGISK);
-      }
-    } else {
-      /* INFO: /sbin/magisk64 (or 32) doesn't exist but /sbin/magisk does */
-      strcpy(path_to_magisk, BITLESS_SBIN_MAGISK);
+      continue;
     }
-  } else {
-    /* INFO: /sbin/magisk64 (or 32) exists */
-    strcpy(path_to_magisk, SBIN_MAGISK);
+
+    strcpy(path_to_magisk, magisk_files[i]);
+
+    break;
+  }
+
+  if (path_to_magisk[0] == '\0') {
+    state->state = Inexistent;
+
+    return;
   }
 
   char *argv[4] = { "magisk", "-v", NULL, NULL };
@@ -91,7 +74,7 @@ void magisk_get_existence(struct root_impl_state *state) {
     return;
   }
 
-  state->variant = (uint8_t)Official;
+  state->variant = (uint8_t)MOfficial;
 
   for (unsigned long i = 0; i < sizeof(supported_variants) / sizeof(supported_variants[0]); i++) {
     if (strstr(magisk_info, supported_variants[i])) {
@@ -156,37 +139,17 @@ bool magisk_uid_granted_root(uid_t uid) {
   return result[0] != '\0';
 }
 
-bool magisk_uid_should_umount(uid_t uid) {
-  char uid_str[16];
-  snprintf(uid_str, sizeof(uid_str), "%d", uid);
-
-  char *const argv_pm[] = { "pm", "list", "packages", "--uid", uid_str, NULL };
-
-  char result[256];
-  if (!exec_command(result, sizeof(result), "/system/bin/pm", argv_pm)) {
-    LOGE("Failed to execute pm binary: %s\n", strerror(errno));
-    errno = 0;
-
-    /* INFO: It's better if we do NOT umount than the opposite */
-    return false;
-  }
-
-  if (result[0] == '\0') {
-    LOGE("Failed to get package name from UID %d\n", uid);
-
-    return false;
-  }
-
-  char *package_name = strtok(result + strlen("package:"), " ");
-
-  char sqlite_cmd[256];
+bool magisk_uid_should_umount(const char *const process) {
+  /* INFO: PROCESS_NAME_MAX_LEN already has a +1 for NULL */
+  char sqlite_cmd[51 + PROCESS_NAME_MAX_LEN];
   if (is_using_sulist)
-    snprintf(sqlite_cmd, sizeof(sqlite_cmd), "select 1 from sulist where package_name=\"%s\" limit 1", package_name);
+    snprintf(sqlite_cmd, sizeof(sqlite_cmd), "SELECT 1 FROM sulist WHERE process=\"%s\" LIMIT 1", process);
   else
-    snprintf(sqlite_cmd, sizeof(sqlite_cmd), "select 1 from denylist where package_name=\"%s\" limit 1", package_name);
+    snprintf(sqlite_cmd, sizeof(sqlite_cmd), "SELECT 1 FROM denylist WHERE process=\"%s\" LIMIT 1", process);
 
   char *const argv[] = { "magisk", "--sqlite", sqlite_cmd, NULL };
 
+  char result[sizeof("1=1")];
   if (!exec_command(result, sizeof(result), (const char *)path_to_magisk, argv)) {
     LOGE("Failed to execute magisk binary: %s\n", strerror(errno));
     errno = 0;

@@ -15,7 +15,6 @@
 
 #include <android/log.h>
 
-#include "dl.h"
 #include "utils.h"
 
 #undef LOG_TAG
@@ -32,7 +31,7 @@ zygisk_companion_entry load_module(int fd) {
   char path[PATH_MAX];
   snprintf(path, sizeof(path), "/proc/self/fd/%d", fd);
 
-  void *handle = dlopen_ext(path, RTLD_NOW);
+  void *handle = dlopen(path, RTLD_NOW);
 
   if (!handle) return NULL;
 
@@ -122,11 +121,7 @@ void companion_entry(int fd) {
     ASSURE_SIZE_WRITE("ZygiskdCompanion", "module_entry", ret, sizeof(uint8_t));
   }
 
-  struct sigaction sa;
-  memset(&sa, 0, sizeof(sa));
-
-  sigemptyset(&sa.sa_mask);
-  sa.sa_handler = SIG_IGN;
+  struct sigaction sa = { .sa_handler = SIG_IGN };
   sigaction(SIGPIPE, &sa, NULL);
 
   while (1) {

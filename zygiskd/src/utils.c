@@ -3,11 +3,13 @@
 #include <string.h>
 #include <fcntl.h>
 #include <poll.h>
+#include <errno.h>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <sys/wait.h>
 #include <sys/un.h>
-#include <errno.h>
+#include <sys/sysmacros.h>
+#include <sys/mount.h>
 
 #include <unistd.h>
 #include <linux/limits.h>
@@ -18,6 +20,11 @@
 
 #include "utils.h"
 #include "root_impl/common.h"
+#include "root_impl/kernelsu.h"
+#include "root_impl/magisk.h"
+
+int clean_namespace_fd = 0;
+int mounted_namespace_fd = 0;
 
 bool switch_mount_namespace(pid_t pid) {
   char path[PATH_MAX];
@@ -184,7 +191,7 @@ int unix_listener_from_path(char *restrict path) {
     return -1;
   }
 
-  if (chcon(path, "u:object_r:magisk_file:s0") == -1) {
+  if (chcon(path, "u:object_r:zygisk_file:s0") == -1) {
     LOGE("chcon: %s\n", strerror(errno));
 
     return -1;
@@ -351,7 +358,7 @@ bool exec_command(char *restrict buf, size_t len, const char *restrict file, cha
     dup2(link[1], STDOUT_FILENO);
     close(link[0]);
     close(link[1]);
-    
+
     execv(file, argv);
 
     LOGE("execv failed: %s\n", strerror(errno));
@@ -430,7 +437,8 @@ void stringify_root_impl_name(struct root_impl impl, char *restrict output) {
       break;
     }
     case KernelSU: {
-      strcpy(output, "KernelSU");
+      if (impl.variant == KOfficial) strcpy(output, "KernelSU");
+      else strcpy(output, "KernelSU Next");
 
       break;
     }
@@ -440,13 +448,381 @@ void stringify_root_impl_name(struct root_impl impl, char *restrict output) {
       break;
     }
     case Magisk: {
-      if (impl.variant == 0) {
-        strcpy(output, "Magisk Official");
-      } else {
-        strcpy(output, "Magisk Kitsune");
-      }
+      if (impl.variant == MOfficial) strcpy(output, "Magisk Official");
+      else strcpy(output, "Magisk Kitsune");
 
       break;
     }
   }
+}
+
+struct mountinfo {
+  unsigned int id;
+  unsigned int parent;
+  dev_t device;
+  const char *root;
+  const char *target;
+  const char *vfs_option;
+  struct {
+      unsigned int shared;
+      unsigned int master;
+      unsigned int propagate_from;
+  } optional;
+  const char *type;
+  const char *source;
+  const char *fs_option;
+};
+
+struct mountinfos {
+  struct mountinfo *mounts;
+  size_t length;
+};
+
+char *strndup(const char *restrict str, size_t length) {
+  char *restrict copy = malloc(length + 1);
+  if (copy == NULL) return NULL;
+
+  memcpy(copy, str, length);
+  copy[length] = '\0';
+
+  return copy;
+}
+
+void free_mounts(struct mountinfos *restrict mounts) {
+  for (size_t i = 0; i < mounts->length; i++) {
+    free((void *)mounts->mounts[i].root);
+    free((void *)mounts->mounts[i].target);
+    free((void *)mounts->mounts[i].vfs_option);
+    free((void *)mounts->mounts[i].type);
+    free((void *)mounts->mounts[i].source);
+    free((void *)mounts->mounts[i].fs_option);
+  }
+
+  free((void *)mounts->mounts);
+}
+
+bool parse_mountinfo(const char *restrict pid, struct mountinfos *restrict mounts) {
+  char path[PATH_MAX];
+  snprintf(path, PATH_MAX, "/proc/%s/mountinfo", pid);
+
+  FILE *mountinfo = fopen(path, "r");
+  if (mountinfo == NULL) {
+    LOGE("fopen: %s\n", strerror(errno));
+
+    return false;
+  }
+
+  char line[PATH_MAX];
+  size_t i = 0;
+
+  mounts->mounts = NULL;
+  mounts->length = 0;
+
+  while (fgets(line, sizeof(line), mountinfo) != NULL) {
+    int root_start = 0, root_end = 0;
+    int target_start = 0, target_end = 0;
+    int vfs_option_start = 0, vfs_option_end = 0;
+    int type_start = 0, type_end = 0;
+    int source_start = 0, source_end = 0;
+    int fs_option_start = 0, fs_option_end = 0;
+    int optional_start = 0, optional_end = 0;
+    unsigned int id, parent, maj, min;
+    sscanf(line,
+            "%u "           // (1) id
+            "%u "           // (2) parent
+            "%u:%u "        // (3) maj:min
+            "%n%*s%n "      // (4) mountroot
+            "%n%*s%n "      // (5) target
+            "%n%*s%n"       // (6) vfs options (fs-independent)
+            "%n%*[^-]%n - " // (7) optional fields
+            "%n%*s%n "      // (8) FS type
+            "%n%*s%n "      // (9) source
+            "%n%*s%n",      // (10) fs options (fs specific)
+            &id, &parent, &maj, &min, &root_start, &root_end, &target_start,
+            &target_end, &vfs_option_start, &vfs_option_end,
+            &optional_start, &optional_end, &type_start, &type_end,
+            &source_start, &source_end, &fs_option_start, &fs_option_end);
+
+    mounts->mounts = (struct mountinfo *)realloc(mounts->mounts, (i + 1) * sizeof(struct mountinfo));
+    if (!mounts->mounts) {
+      LOGE("Failed to allocate memory for mounts->mounts");
+
+      fclose(mountinfo);
+      free_mounts(mounts);
+
+      return false;
+    }
+
+    unsigned int shared = 0;
+    unsigned int master = 0;
+    unsigned int propagate_from = 0;
+    if (strstr(line + optional_start, "shared:")) {
+      shared = (unsigned int)atoi(strstr(line + optional_start, "shared:") + 7);
+    }
+
+    if (strstr(line + optional_start, "master:")) {
+      master = (unsigned int)atoi(strstr(line + optional_start, "master:") + 7);
+    }
+
+    if (strstr(line + optional_start, "propagate_from:")) {
+      propagate_from = (unsigned int)atoi(strstr(line + optional_start, "propagate_from:") + 15);
+    }
+
+    mounts->mounts[i].id = id;
+    mounts->mounts[i].parent = parent;
+    mounts->mounts[i].device = (dev_t)(makedev(maj, min));
+    mounts->mounts[i].root = strndup(line + root_start, (size_t)(root_end - root_start));
+    mounts->mounts[i].target = strndup(line + target_start, (size_t)(target_end - target_start));
+    mounts->mounts[i].vfs_option = strndup(line + vfs_option_start, (size_t)(vfs_option_end - vfs_option_start));
+    mounts->mounts[i].optional.shared = shared;
+    mounts->mounts[i].optional.master = master;
+    mounts->mounts[i].optional.propagate_from = propagate_from;
+    mounts->mounts[i].type = strndup(line + type_start, (size_t)(type_end - type_start));
+    mounts->mounts[i].source = strndup(line + source_start, (size_t)(source_end - source_start));
+    mounts->mounts[i].fs_option = strndup(line + fs_option_start, (size_t)(fs_option_end - fs_option_start));
+
+    i++;
+  }
+
+  fclose(mountinfo);
+
+  mounts->length = i;
+
+  return true;
+}
+
+bool umount_root(struct root_impl impl) {
+  /* INFO: We are already in the target pid mount namespace, so actually,
+             when we use self here, we meant its pid.
+  */
+  struct mountinfos mounts;
+  if (!parse_mountinfo("self", &mounts)) {
+    LOGE("Failed to parse mountinfo\n");
+
+    return false;
+  }
+
+  /* INFO: "Magisk" is the longest word that will ever be put in source_name */
+  char source_name[sizeof("magisk")];
+  if (impl.impl == KernelSU) strcpy(source_name, "KSU");
+  else if (impl.impl == APatch) strcpy(source_name, "APatch");
+  else strcpy(source_name, "magisk");
+
+  LOGI("[%s] Unmounting root", source_name);
+
+  const char **targets_to_unmount = NULL;
+  size_t num_targets = 0;
+
+  for (size_t i = 0; i < mounts.length; i++) {
+    struct mountinfo mount = mounts.mounts[i];
+
+    bool should_unmount = false;
+    /* INFO: The root implementations have their own /system mounts, so we
+                only skip the mount if they are from a module, not Magisk itself.
+    */
+    if (strncmp(mount.target, "/system/", strlen("/system/")) == 0 &&
+        strncmp(mount.root, "/adb/modules/", strlen("/adb/modules/")) == 0 &&
+        strncmp(mount.target, "/system/etc/", strlen("/system/etc/")) != 0) continue;
+
+    if (strcmp(mount.source, source_name) == 0) should_unmount = true;
+    if (strncmp(mount.target, "/data/adb/modules", strlen("/data/adb/modules")) == 0) should_unmount = true;
+    if (strncmp(mount.root, "/adb/modules/", strlen("/adb/modules/")) == 0) should_unmount = true;
+
+    if (!should_unmount) continue;
+
+    num_targets++;
+    targets_to_unmount = realloc(targets_to_unmount, num_targets * sizeof(char*));
+    if (targets_to_unmount == NULL) {
+      LOGE("[%s] Failed to allocate memory for targets_to_unmount\n", source_name);
+
+      free(targets_to_unmount);
+      free_mounts(&mounts);
+
+      return false;
+    }
+
+    targets_to_unmount[num_targets - 1] = mount.target;
+  }
+
+  for (size_t i = num_targets; i > 0; i--) {
+    const char *target = targets_to_unmount[i - 1];
+    if (umount2(target, MNT_DETACH) == -1) {
+      LOGE("[%s] Failed to unmount %s: %s\n", source_name, target, strerror(errno));
+    } else {
+      LOGI("[%s] Unmounted %s\n", source_name, target);
+    }
+  }
+  free(targets_to_unmount);
+
+  free_mounts(&mounts);
+
+  return true;
+}
+
+int save_mns_fd(int pid, enum MountNamespaceState mns_state, struct root_impl impl) {
+  if (mns_state == Clean && clean_namespace_fd != 0) return clean_namespace_fd;
+  if (mns_state == Mounted && mounted_namespace_fd != 0) return mounted_namespace_fd;
+
+  int sockets[2];
+  if (socketpair(AF_UNIX, SOCK_STREAM, 0, sockets) == -1) {
+    LOGE("socketpair: %s\n", strerror(errno));
+
+    return -1;
+  }
+
+  int socket_parent = sockets[0];
+  int socket_child = sockets[1];
+
+  pid_t fork_pid = fork();
+  if (fork_pid < 0) {
+    LOGE("fork: %s\n", strerror(errno));
+
+    if (close(socket_parent) == -1)
+      LOGE("Failed to close socket_parent: %s\n", strerror(errno));
+
+    if (close(socket_child) == -1)
+      LOGE("Failed to close socket_child: %s\n", strerror(errno));
+
+    return -1;
+  }
+
+  if (fork_pid == 0) {
+    close(socket_parent);
+
+    if (switch_mount_namespace(pid) == false) {
+      LOGE("Failed to switch mount namespace\n");
+
+      if (write_uint8_t(socket_child, 0) == -1)
+        LOGE("Failed to write to socket_child: %s\n", strerror(errno));
+
+      goto finalize_mns_fork;
+    }
+
+    if (mns_state == Clean) {
+      unshare(CLONE_NEWNS);
+
+      if (!umount_root(impl)) {
+        LOGE("Failed to umount root\n");
+
+        if (write_uint8_t(socket_child, 0) == -1)
+          LOGE("Failed to write to socket_child: %s\n", strerror(errno));
+
+        goto finalize_mns_fork;
+      }
+    }
+
+    if (write_uint8_t(socket_child, 1) == -1) {
+      LOGE("Failed to write to socket_child: %s\n", strerror(errno));
+
+      close(socket_child);
+
+      _exit(1);
+    }
+
+    uint8_t has_opened = 0;
+    if (read_uint8_t(socket_child, &has_opened) == -1)
+      LOGE("Failed to read from socket_child: %s\n", strerror(errno));
+
+    finalize_mns_fork:
+      if (close(socket_child) == -1)
+        LOGE("Failed to close socket_child: %s\n", strerror(errno));
+
+      _exit(0);
+  }
+
+  close(socket_child);
+
+  uint8_t has_succeeded = 0;
+  if (read_uint8_t(socket_parent, &has_succeeded) == -1) {
+    LOGE("Failed to read from socket_parent: %s\n", strerror(errno));
+
+    close(socket_parent);
+
+    return -1;
+  }
+
+  if (!has_succeeded) {
+    LOGE("Failed to umount root\n");
+
+    close(socket_parent);
+
+    return -1;
+  }
+
+  char ns_path[PATH_MAX];
+  snprintf(ns_path, PATH_MAX, "/proc/%d/ns/mnt", fork_pid);
+
+  int ns_fd = open(ns_path, O_RDONLY);
+  if (ns_fd == -1) {
+    LOGE("open: %s\n", strerror(errno));
+
+    close(socket_parent);
+
+    return -1;
+  }
+
+  uint8_t opened_signal = 1;
+  if (write_uint8_t(socket_parent, opened_signal) == -1) {
+    LOGE("Failed to write to socket_parent: %s\n", strerror(errno));
+
+    close(ns_fd);
+    close(socket_parent);
+
+    return -1;
+  }
+
+  if (close(socket_parent) == -1) {
+    LOGE("Failed to close socket_parent: %s\n", strerror(errno));
+
+    close(ns_fd);
+
+    return -1;
+  }
+
+  if (waitpid(fork_pid, NULL, 0) == -1) {
+    LOGE("waitpid: %s\n", strerror(errno));
+
+    return -1;
+  }
+
+  if (impl.impl == Magisk && impl.variant == MKitsune && mns_state == Clean) {
+    LOGI("[Magisk] Magisk Kitsune detected, will skip cache first.");
+
+    /* INFO: MagiskSU of Kitsune has a special behavior: It is only mounted
+               once system boots, because of that, we can only cache once
+               that happens, or else it will clean the mounts, then later
+               get MagiskSU mounted, resulting in a mount leak.
+
+       SOURCES:
+        - https://github.com/1q23lyc45/KitsuneMagisk/blob/8562a0b2ad142d21566c1ea41690ad64108ca14c/native/src/core/bootstages.cpp#L359
+    */
+    char boot_completed[2];
+    get_property("sys.boot_completed", boot_completed);
+
+    if (boot_completed[0] == '1') {
+      LOGI("[Magisk] Appropriate mns found, caching clean namespace fd.");
+
+      clean_namespace_fd = ns_fd;
+    }
+
+    /* BUG: For the case where it hasn't booted yet, we will need to
+              keep creating mns that will be left behind, the issue is:
+              they are not close'd. This is a problem, because we will
+              have a leak of fds, although only from the period of booting.
+
+            When trying to close the ns_fd from the libzygisk.so, fdsan
+              will complain as it is owned by RandomAccessFile, and if
+              we close from ReZygiskd, system will refuse to boot for
+              some reason, even if we wait for setns in libzygisk.so,
+              and that issue is related to setns, as it only happens
+              with it.
+    */
+
+    return ns_fd;
+  }
+
+  if (mns_state == Clean) clean_namespace_fd = ns_fd;
+  else if (mns_state == Mounted) mounted_namespace_fd = ns_fd;
+
+  return ns_fd;
 }

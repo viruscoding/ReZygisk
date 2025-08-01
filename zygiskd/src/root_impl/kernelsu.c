@@ -19,10 +19,18 @@
 #define CMD_GET_VERSION 2
 #define CMD_UID_GRANTED_ROOT 12
 #define CMD_UID_SHOULD_UMOUNT 13
+#define CMD_GET_MANAGER_UID 16
+#define CMD_HOOK_MODE 0xC0DEAD1A
+
+static enum kernelsu_variants variant = KOfficial;
+
+static bool supports_manager_uid_retrieval = false;
 
 void ksu_get_existence(struct root_impl_state *state) {
+  int reply_ok = 0;
+
   int version = 0;
-  prctl((signed int)KERNEL_SU_OPTION, CMD_GET_VERSION, &version, 0, 0);
+  prctl((signed int)KERNEL_SU_OPTION, CMD_GET_VERSION, &version, 0, &reply_ok);
 
   if (version == 0) state->state = Abnormal;
   else if (version >= MIN_KSU_VERSION && version <= MAX_KSU_VERSION) {
@@ -42,6 +50,25 @@ void ksu_get_existence(struct root_impl_state *state) {
     }
 
     state->state = Supported;
+
+    char mode[16] = { 0 };
+    prctl((signed int)KERNEL_SU_OPTION, CMD_HOOK_MODE, mode, NULL, &reply_ok);
+
+    if (mode[0] != '\0') state->variant = KNext;
+    else state->variant = KOfficial;
+
+    variant = state->variant;
+
+    /* INFO: CMD_GET_MANAGER_UID is a KernelSU Next feature, however we won't 
+               limit to KernelSU Next only in case other forks wish to implement
+               it. */
+    prctl((signed int)KERNEL_SU_OPTION, CMD_GET_MANAGER_UID, NULL, NULL, &reply_ok);
+
+    if (reply_ok == KERNEL_SU_OPTION) {
+      LOGI("KernelSU implementation supports CMD_GET_MANAGER_UID.\n");
+
+      supports_manager_uid_retrieval = true;
+    }
   }
   else if (version >= 1 && version <= MIN_KSU_VERSION - 1) state->state = TooOld;
   else state->state = Abnormal;
@@ -68,8 +95,26 @@ bool ksu_uid_should_umount(uid_t uid) {
 }
 
 bool ksu_uid_is_manager(uid_t uid) {
+  /* INFO: If the manager UID is set, we can use it to check if the UID
+             is the manager UID, which is more reliable than checking
+             the KSU manager data directory, as spoofed builds of
+             KernelSU Next have different package names.
+  */
+  if (supports_manager_uid_retrieval) {
+    int reply_ok = 0;
+
+    uid_t manager_uid = 0;
+    prctl(KERNEL_SU_OPTION, CMD_GET_MANAGER_UID, &manager_uid, NULL, &reply_ok);
+
+    return uid == manager_uid;
+  }
+
+  const char *manager_path = NULL;
+  if (variant == KOfficial) manager_path = "/data/user_de/0/me.weishu.kernelsu";
+  else if (variant == KNext) manager_path = "/data/user_de/0/com.rifsxd.ksunext";
+
   struct stat s;
-  if (stat("/data/user_de/0/me.weishu.kernelsu", &s) == -1) {
+  if (stat(manager_path, &s) == -1) {
     if (errno != ENOENT) {
       LOGE("Failed to stat KSU manager data directory: %s\n", strerror(errno));
     }
